@@ -32,7 +32,7 @@ term.x64: posix.c
 
 term.386: posix.c
 	rm -f term.i386
-	export WATCOM=$(WATCOM); export PATH=$(WATCOM)/binl:$(PATH); export INCLUDE=$(WATCOM)/lh; wcl386 -os posix.c ncurses.lib
+	export WATCOM=$(WATCOM); export PATH=$(WATCOM)/binl:$(PATH); export INCLUDE=$(WATCOM)/lh; wcl386 -os -fe=posix getch.c ncurses.lib
 	xxd -l128 -s 84 posix | xxd -r -s -32 - posix
 	echo "000002c: 02" | xxd -r - posix
 	strip posix

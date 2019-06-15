@@ -28,3 +28,5 @@ int main(int argc, char * argv[]) {
 
   return 0;
 }
+
+/* tputs(tparm(cursor_address, 18, 40), 1, my_putchar); */
