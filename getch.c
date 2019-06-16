@@ -101,7 +101,7 @@ int getWindowSize(int * x, int * y) {
   return TRUE;
 }
 
-#define QWERTYJFFGH(n, code, string) sequences[n].value = code; \
+#define SETKEY(n, code, string) sequences[n].value = code; \
     sequences[n].text = string; \
     sequences[n].length = strlen(string)
 
@@ -126,7 +126,7 @@ int mygetch() {
 
     temp = fgetc(stdin);
 
-    if(temp > 31 || temp == 127 || temp == 8 || temp == 9 || temp == 10) {
+    if(temp > 31 || temp == 8 || temp == 9 || temp == 10) {
       if(temp == 127) {
         temp = 8;
       }
@@ -205,41 +205,42 @@ int main(int argc, char * argv[]) {
   if(
     isatty(STDOUT_FILENO) &&
     setupterm(0, STDOUT_FILENO, &errret) == OK &&
-    setupTermios() &&
-    setupSignals()
+    setupTermios()
   ) {
     atexit(exitTermios);
 
-    /* populate the lookup table with the codes we want */
-    QWERTYJFFGH(0, KEY_HOME, key_home);
-    QWERTYJFFGH(1, KEY_END, key_end);
-    QWERTYJFFGH(2, KEY_NPAGE, key_npage);
-    QWERTYJFFGH(3, KEY_PPAGE, key_ppage);
-    QWERTYJFFGH(4, KEY_UP, key_up);
-    QWERTYJFFGH(5, KEY_DOWN, key_down);
-    QWERTYJFFGH(6, KEY_LEFT, key_left);
-    QWERTYJFFGH(7, KEY_RIGHT, key_right);
+    if(setupSignals()) {
+      /* populate the lookup table with the codes we want */
+      SETKEY(0, KEY_HOME, key_home);
+      SETKEY(1, KEY_END, key_end);
+      SETKEY(2, KEY_NPAGE, key_npage);
+      SETKEY(3, KEY_PPAGE, key_ppage);
+      SETKEY(4, KEY_UP, key_up);
+      SETKEY(5, KEY_DOWN, key_down);
+      SETKEY(6, KEY_LEFT, key_left);
+      SETKEY(7, KEY_RIGHT, key_right);
 
-    /* sort the table by length */
-    qsort(&sequences, 8, sizeof(struct entry), cmpfunc);
+      /* sort the table by length */
+      qsort(&sequences, 8, sizeof(struct entry), cmpfunc);
 
-    sequence = malloc(maxLength+1);
+      sequence = malloc(maxLength+1);
 
-    do {
-      temp = mygetch();
+      do {
+        temp = mygetch();
 
-      switch(temp) {
-        case KEY_RESIZE: {
-          getWindowSize(&x, &y);
+        switch(temp) {
+          case KEY_RESIZE: {
+            getWindowSize(&x, &y);
 
-          printf("window size %d %d\n", x, y);
-        } break;
+            printf("window size %d %d\n", x, y);
+          } break;
 
-        default: {
-          printf("%d\n", temp);
-        } break;
-      }
-    } while(temp != 'q');
+          default: {
+            printf("%d\n", temp);
+          } break;
+        }
+      } while(temp != 'q');
+    }
   }
 
   return 0;

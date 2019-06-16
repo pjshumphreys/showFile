@@ -16,6 +16,11 @@ term16.exe: dos.c
 	wcl /ml /zt1900 /dMICROSOFT=1 /fpc /0 /os /k3000 /fe=term16 dos.c
 	c:\upx\upx --8086 .\term16.exe
 
+term.exe: win32.c
+	del term.exe
+	wcl386 -bcl=nt /os /fe=term win32.c
+	c:\upx\upx .\term.exe
+
 term.arm: posix.c
 	rm -f term.arm
 	/opt/cross/bin/arm-linux-musleabi-gcc -o term -static -lncursesw -Os -O2 -fmax-errors=20 -Wl,-O,-s,--gc-sections posix.c /opt/cross/arm-linux-musleabi/lib/libncursesw.a
