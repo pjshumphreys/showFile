@@ -11,20 +11,23 @@
 int width = 0;
 int height = 0;
 int gotch = 0;
-int smart = FALSE;
+int smart;
 
-HANDLE eventHandle;
+HANDLE inputHandle;
+HANDLE outputHandle;
 INPUT_RECORD record[500];
 DWORD numRead;
 
 int isNotWine() {
   static const char *(CDECL *pwine_get_version)(void);
   HMODULE hntdll = GetModuleHandle("ntdll.dll");
+
   if(!hntdll) {
     return TRUE;
   }
 
   pwine_get_version = (void *)GetProcAddress(hntdll, "wine_get_version");
+
   if(pwine_get_version) {
     return FALSE;
   }
@@ -32,12 +35,11 @@ int isNotWine() {
   return TRUE;
 }
 
-
 int pollWindowSize() {
   CONSOLE_SCREEN_BUFFER_INFO csbi;
   int columns, rows;
 
-  GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
+  GetConsoleScreenBufferInfo(outputHandle, &csbi);
   columns = csbi.srWindow.Right - csbi.srWindow.Left + 1;
   rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
 
@@ -56,7 +58,8 @@ int pollWindowSize() {
 
 int ProcessStdin(void) {
   int blah;
-  if(!ReadConsoleInput(eventHandle, &record, smart?1:500, &numRead)) {
+
+  if(!ReadConsoleInput(inputHandle, &record, smart?1:500, &numRead)) {
     // hmm handle this error somehow...
     return 0;
   }
@@ -82,7 +85,7 @@ int ProcessStdin(void) {
   switch(blah) {
     case VK_RETURN:
       return 10;
-    case 0:
+
     case VK_BACK:
     case VK_TAB:
     case VK_ESCAPE:
@@ -98,33 +101,30 @@ int ProcessStdin(void) {
     case VK_LMENU:
     case VK_RMENU:
     case 0xe3:
+    case 0:
       return 0;
 
     default:
       if(blah > 31) {
         return blah+256;
       }
+
       return 0;
   }
 }
 
 int mygetch() {
-  DWORD result = -1;
-  char result2[2048];
   int temp;
-  unsigned long charRead = 0;
+
+  if(gotch) {
+    temp = gotch;
+    gotch = 0;
+    return temp;
+  }
 
   do {
-    if(gotch) {
-      temp = gotch;
-      gotch= 0;
-      return temp;
-    }
-
-    result = WaitForSingleObject(eventHandle, 300);
-
-    switch(result) {
-      case WAIT_TIMEOUT: // timeout
+    switch(WaitForSingleObject(inputHandle, 300)) {
+      case WAIT_TIMEOUT: { /* timeout */
         if(pollWindowSize()) {
           return KEY_RESIZE;
         }
@@ -132,7 +132,7 @@ int mygetch() {
         if(!smart) {
           temp = ProcessStdin();
 
-          if (temp) {
+          if(temp) {
             if(pollWindowSize()) {
               gotch = temp;
               return KEY_RESIZE;
@@ -141,14 +141,14 @@ int mygetch() {
             return temp;
           }
         }
-      break;
+      } break;
 
-      case WAIT_OBJECT_0: // stdin at array index 0
+      case WAIT_OBJECT_0: { /* stdin at array index 0 */
         smart = TRUE;
 
         temp = ProcessStdin();
 
-        if (temp) {
+        if(temp) {
           if(pollWindowSize()) {
             gotch = temp;
             return KEY_RESIZE;
@@ -156,23 +156,17 @@ int mygetch() {
 
           return temp;
         }
-
-        break;
-
-      default: // handle the other possible conditions
-        printf("e\n");
-
-        break;
+      } break;
     }
-  } while(1); // end switch result
+  } while(1);
 }
-
 
 int main(char argc, char* argv[]) {
   int temp = 0;
 
-  eventHandle = GetStdHandle(STD_INPUT_HANDLE);
-  SetConsoleMode(eventHandle, 0);
+  inputHandle = GetStdHandle(STD_INPUT_HANDLE);
+  outputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+  SetConsoleMode(inputHandle, 0);
   smart = isNotWine();
 
   do {
