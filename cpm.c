@@ -446,7 +446,7 @@ int main(int argc, char * argv[]) {
         lines = NULL;
 
         /* If they don't exist, ask the user for them directly,
-        then try to store them for next time with set*/
+        then try to store them for next time with setenv */
         printf("SCREEN COLUMNS (80)?\n");
         d_fgets(&columns, stdin);
 
