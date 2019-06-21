@@ -30,7 +30,7 @@ int parseCursorLocation(int *x, int * y) {
       do {
         temp = getch();
 
-        if(temp > 47 && temp < 58) { /* quit if not digit */
+        if(temp > 47 && temp < 58) { /* quit if not a digit */
           arr[i] = arr[i] * 10 + temp - 48;
         }
         else {
