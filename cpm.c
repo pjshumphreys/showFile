@@ -438,8 +438,8 @@ int main(int argc, char * argv[]) {
       lines = getenv(lenv);
 
       if(columns != NULL && lines != NULL) {
-        x = atoi(columns);
-        y = atoi(lines);
+        x = myatoi(columns);
+        y = myatoi(lines);
       }
       else {
         columns = NULL;
