@@ -45,7 +45,7 @@ int setupTermios() {
 
   newterm.c_lflag &= ~(ICANON | ECHO);
 
-  tcsetattr(0, TCSANOW, &newterm);
+  tcsetattr(STDIN_FILENO, TCSANOW, &newterm);
 
   return TRUE;
 }
@@ -55,8 +55,8 @@ void sigwinchHandler(int sig) {
 }
 
 void exitTermios(void) {
-  tcsetattr(0, TCSANOW, &oldterm);
-  tcflush(0, TCIFLUSH);
+  tcsetattr(STDIN_FILENO, TCSANOW, &oldterm);
+  tcflush(STDIN_FILENO, TCIFLUSH);
 
   free(sequence);
 }
