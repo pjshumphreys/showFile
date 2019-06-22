@@ -3,7 +3,8 @@
 #include <string.h>
 #include <errno.h>
 
-#define __Z88DK_R2L_CALLING_CONVENTION /* Makes varargs kinda work on Z88DK as long as the function using them uses the __stdc calling convention */
+#define __Z88DK_R2L_CALLING_CONVENTION /* Makes varargs kinda work on Z88DK
+as long as the function using them uses the __stdc calling convention */
 #include <stdarg.h>
 
 #include <conio.h>
@@ -89,7 +90,8 @@ int d_fgets(char** ws, FILE* stream) {
 
     /*
       try reallocating the output string to be a bit longer
-      if it fails then set any existing buffer to the return value and return true
+      if it fails then set any existing buffer to the return
+      value and return true.
     */
 
     reallocMsg(&newWs, potentialTotalLength+1);
@@ -100,8 +102,12 @@ int d_fgets(char** ws, FILE* stream) {
     /* the potential new string becomes the actual one */
     totalLength = potentialTotalLength;
 
-    /* if the last character is '\n' (ie we've reached the end of a line) then return the result */
-    if(newWs[totalLength-1] == '\n' || newWs[totalLength-1] == '\x0d') {
+    /* if the last character is '\n' (ie we've reached
+    the end of a line) then return the result */
+    if(
+        newWs[totalLength-1] == '\n' ||
+        newWs[totalLength-1] == '\x0d'
+    ) {
       /* ensure null termination of the string */
       newWs[totalLength-1] = '\0';
 
@@ -156,11 +162,13 @@ int d_sprintf(void **str, char *format, ...) __stdc {
   newSize = (size_t)(vsnprintf(NULL, 0, format, args)); /* plus '\0' */
   va_end(args);
 
-  /* Create a new block of memory with the correct size rather than using realloc */
-  /* as any old values could overlap with the format string. quit on failure */
+  /* Create a new block of memory with the correct size rather
+  than using realloc as any old values could overlap with the
+  format string. quit on failure */
   reallocMsg((void**)&newStr, newSize+1);
 
-  /* do the string formatting for real. vsnprintf doesn't seem to be available on Lattice C */
+  /* do the string formatting for real. vsnprintf doesn't seem
+  to be available on Lattice C */
   va_start(args, format);
   vsnprintf(newStr, newSize+1, format, args);
   va_end(args);
@@ -309,7 +317,8 @@ int setenv(char *name, char *value, int overwrite) {
 
       if(strncmp(temp, name, len) == 0 && temp[len] == '=') {
         if(!overwrite) {
-          /* The env var has already been set and we shouldn't overwrite it. return ENOMEM */
+          /* The env var has already been set and we shouldn't
+          overwrite it. return ENOMEM */
           fclose(envFile);
           fclose(envFileNew);
           remove(envFileNew);

@@ -3,26 +3,14 @@
 #include <kernel.h>
 
 const int columns[] = {
-  80,
-  40,
-  20,
-  80,
-  40,
-  20,
-  40,
-  40,
+  80, 40, 20, 80,
+  40, 20, 40, 40,
   80
 };
 
 const int rows[] = {
-  32,
-  32,
-  32,
-  25,
-  32,
-  32,
-  25,
-  25,
+  32, 32, 32, 25,
+  32, 32, 25, 25,
   0 /* 0 means just output all lines then quit */
 };
 

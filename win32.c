@@ -83,9 +83,6 @@ int ProcessStdin(void) {
   blah = record[0].Event.KeyEvent.wVirtualKeyCode;
 
   switch(blah) {
-    case VK_RETURN:
-      return 10;
-
     case VK_BACK:
     case VK_TAB:
     case VK_ESCAPE:

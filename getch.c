@@ -117,13 +117,13 @@ int mygetch() {
   int i = 0;
   int currentItem = 0;
 
+  if(termResized) {
+    termResized = FALSE;
+
+    return KEY_RESIZE;
+  }
+
   do {
-    if(termResized) {
-      termResized = FALSE;
-
-      return KEY_RESIZE;
-    }
-
     temp = fgetc(stdin);
 
     if(temp > 31 || temp == 8 || temp == 9 || temp == 10) {
