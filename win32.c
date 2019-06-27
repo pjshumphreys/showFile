@@ -43,15 +43,19 @@ int pollWindowSize() {
   columns = csbi.srWindow.Right - csbi.srWindow.Left + 1;
   rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
 
-  if(width && (columns != width || rows != height)) {
+  if(width == 0) {
+    width = columns;
+    height = rows;
+
+    return FALSE;
+  }
+
+  if(columns != width || rows != height) {
     width = columns;
     height = rows;
 
     return TRUE;
   }
-
-  width = columns;
-  height = rows;
 
   return FALSE;
 }

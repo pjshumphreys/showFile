@@ -311,7 +311,12 @@ int setenv(char *name, char *value, int overwrite) {
       }
 
       /* Skip blank lines */
-      if(strlen(temp) == 0) {
+      if(temp == NULL) {
+        continue;
+      }
+
+      /* Skip blank lines */
+      if(temp[0] == 0) {
         continue;
       }
 
