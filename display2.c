@@ -118,13 +118,15 @@ int mygetch() {
   int i = 0;
   int currentItem = 0;
 
-  if(termResized) {
-    termResized = FALSE;
-
-    return KEY_RESIZE;
-  }
-
   do {
+    while(!kbhit()) {
+      if(termResized) {
+        termResized = FALSE;
+
+        return KEY_RESIZE;
+      }
+    }
+
     temp = fgetc(stdin);
 
     if(temp > 31 || temp == 8 || temp == 9 || temp == 10) {
@@ -196,6 +198,7 @@ int cmpfunc(const void * a, const void * b) {
 
 struct offsets {
   long value;
+  int number;
   struct offsets * previous;
   struct offsets * next;
 };
@@ -398,6 +401,7 @@ int lastWordLength = 0;
 void maintainLineOffsets(
     struct offsets ** lastLineOffset,
     FILE * input,
+    int lineNumber,
     int lastWordLength
 ) {
   struct offsets * temp = NULL;
@@ -417,6 +421,7 @@ void maintainLineOffsets(
     reallocMsg(&temp, sizeof(struct offsets));
     temp->value = current;
     temp->previous = *lastLineOffset;
+    temp->number = lineNumber;
     temp->next = NULL;
 
     if(*lastLineOffset) {
@@ -448,6 +453,7 @@ int drawScreen(
 ) {
   int currentLine = 0;
   int notLastLine = TRUE;
+  int leftMargin = 0;
   int i;
 
   if(startLine == previousLine + 1) {
@@ -461,13 +467,30 @@ int drawScreen(
       topLineOffset = topLineOffset->next;
     }
   }
-  else if(topLineOffset && topLineOffset->previous) {
-    topLineOffset = topLineOffset->previous;
-    fseek(input, topLineOffset->value, SEEK_SET);
-    putp(cursor_home);
+  else if(topLineOffset) {
+    if(startLine != previousLine && topLineOffset->previous) {
+      topLineOffset = topLineOffset->previous;
+      fseek(input, topLineOffset->value, SEEK_SET);
+      putp(cursor_home);
 
-    freeAndZero(lastWord);
-    lastWordLength = 0;
+      freeAndZero(lastWord);
+      lastWordLength = 0;
+    }
+    else {
+      fseek(input, topLineOffset->value, SEEK_SET);
+      putp(cursor_home);
+
+      freeAndZero(lastWord);
+      lastWordLength = 0;
+    }
+  }
+
+  if(virtualWidth < width) {
+    leftMargin = (((width - virtualWidth)>>1))-1;
+
+    if(leftMargin < 0) {
+      leftMargin = 0;
+    }
   }
 
   for( ; currentLine < height - 1; currentLine++) {
@@ -482,27 +505,37 @@ int drawScreen(
       maintainLineOffsets(
           &lastLineOffset,
           input,
+          startLine+currentLine,
           lastWordLength
         );
 
       notLastLine = getLine(
           input,
-          width,
+          virtualWidth,
           &line,
           &lineLength,
           &lastWord,
           &lastWordLength
         );
 
-      for(i = 0; i < width; i++) {
-        if(i < lineLength) {
-          fputc(line[i], stdout);
+      for(i = 0; i < width + leftOffset - leftMargin; i++) {
+        if(i == 0 && leftMargin) {
+          for(; i < leftMargin; i++) {
+            fputc(' ', stdout);
+          }
+
+          i = 0;
         }
-        else {
-          fputc(' ', stdout);
+
+        if(i >= leftOffset) {
+          if(i < lineLength) {
+            fputc(line[i], stdout);
+          }
+          else {
+            fputc(' ', stdout);
+          }
         }
       }
-      printf("\n");
     }
   }
 
@@ -516,6 +549,7 @@ int drawScreen(
 
   printf(navMessage);
   fflush(stdout);
+  putp(clr_eos);
 
   if(notLastLine && startLine == *maxLine) {
     (*maxLine)++;
@@ -530,10 +564,14 @@ int main(int argc, char * argv[]) {
   int width = 80;
   int height = 24;
 
+  int leftOffset = 0;
+
   int errret = 0;
   int temp = 0;
   int x;
   int y;
+
+  int virtualWidth = 80;
 
   int currentLine = 0;
   int previousLine = 0;
@@ -575,6 +613,12 @@ int main(int argc, char * argv[]) {
         return 0;
       }
 
+      getWindowSize(&width, &height);
+
+      if(width < 80) {
+        virtualWidth = width;
+      }
+
       do {
         if(currentLine != previousLine || firstTime) {
           drawScreen(
@@ -582,8 +626,8 @@ int main(int argc, char * argv[]) {
               currentLine,
               previousLine,
               &maxLine,
-              width,
-              0,
+              virtualWidth,
+              leftOffset,
               width,
               height
             );
@@ -596,6 +640,31 @@ int main(int argc, char * argv[]) {
         temp = mygetch();
 
         switch(temp) {
+          case KEY_RESIZE: {
+            leftOffset = 0;
+            firstTime = TRUE; /* redraw the whole screen */
+            getWindowSize(&width, &height);
+
+            for(y = height-1; y>1; y--) {
+              if(lastLineOffset->previous) {
+                lastLineOffset = lastLineOffset->previous;
+              }
+            }
+
+            maxLine = lastLineOffset->number;
+
+            while(currentLine > maxLine) {
+              topLineOffset = topLineOffset->previous;
+              currentLine--;
+            }
+
+            previousLine = currentLine;
+
+            while(lastLineOffset->next) {
+              lastLineOffset = lastLineOffset->next;
+            }
+          } break;
+
           case KEY_UP: {
             if(currentLine) {
               currentLine -= 1;
@@ -605,6 +674,20 @@ int main(int argc, char * argv[]) {
           case KEY_DOWN: {
             if(currentLine + 1 <= maxLine) {
               currentLine += 1;
+            }
+          } break;
+
+          case KEY_LEFT: {
+            if(leftOffset) {
+              leftOffset--;
+              firstTime = TRUE; /* redraw the whole screen */
+            }
+          } break;
+
+          case KEY_RIGHT: {
+            if(width < virtualWidth && leftOffset < virtualWidth - width) {
+              leftOffset++;
+              firstTime = TRUE; /* redraw the whole screen */
             }
           } break;
         }
