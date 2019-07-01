@@ -157,6 +157,11 @@ int mygetch() {
         /* compare what we've captured to the keys defined
         in the terminfo description that we want */
         if(strcmp(sequences[currentItem].text, sequence) == 0) {
+          /* consume the rest of the input buffer */
+          while(kbhit()) {
+            fgetc(stdin);
+          }
+
           return sequences[currentItem].value;
         }
 
@@ -257,6 +262,14 @@ int strAppend(char c, char **value, int *strSize) {
   return TRUE;
 }
 
+struct offsets * topLineOffset = NULL;
+
+struct offsets * lastLineOffset = NULL;
+char * line = NULL;
+int lineLength = 0;
+char * lastWord = NULL;
+int lastWordLength = 0;
+
 int getLine(
     FILE * input,
     int width,
@@ -277,12 +290,12 @@ int getLine(
   /* add the characters from last word if there are any,
   break very long words */
   if(*lastWordLength != 0) {
-    if((*lastWord)[(*lastWordLength) - 1] == '\n') {
-      notFirstWordOnLine = 1;
-      (*lastWordLength) = (*lastWordLength) - 1;
-    }
-
     if(*lastWordLength <= width) {
+      if((*lastWord)[(*lastWordLength) - 1] == '\n') {
+        notFirstWordOnLine = 1;
+        (*lastWordLength) = (*lastWordLength) - 1;
+      }
+
       reallocMsg(line, (*lastWordLength)+1);
       memcpy(*line, *lastWord, *lastWordLength);
       (*line)[*lastWordLength] = '\0';
@@ -298,7 +311,25 @@ int getLine(
       notFirstWordOnLine = 1;
     }
     else {
+      reallocMsg(line, width+1);
+      memcpy(*line, *lastWord, width);
+      (*line)[width] = '\0';
+      *lineLength = width;
+
       /* memmove the characters down */
+      memmove(*lastWord, (*lastWord)+width, *lastWordLength+1-width);
+      *lastWordLength -= width;
+
+      if(*lastWordLength && lastLineOffset->next == NULL) {
+        maintainLineOffsets(
+            &lastLineOffset,
+            input,
+            lastLineOffset->number+1,
+            lastWordLength,
+            width
+          );
+      }
+
       return TRUE;
     }
   }
@@ -390,31 +421,31 @@ int getLine(
   } while(1);
 }
 
-struct offsets * topLineOffset = NULL;
 
-struct offsets * lastLineOffset = NULL;
-char * line = NULL;
-int lineLength = 0;
-char * lastWord = NULL;
-int lastWordLength = 0;
 
 void maintainLineOffsets(
     struct offsets ** lastLineOffset,
     FILE * input,
     int lineNumber,
-    int lastWordLength
+    int lastWordLength,
+    int width
 ) {
   struct offsets * temp = NULL;
 
   long current = ftell(input);
 
   if(lastWordLength) {
-    if(lastWord[lastWordLength-1] == '\n') {
-      current -= lastWordLength;
-    }
-    else {
-      current -= lastWordLength + 1;
-    }
+    //if(lastWordLength < width) {
+      if(lastWordLength < width && lastWord[lastWordLength-1] == '\n') {
+        current -= lastWordLength;
+      }
+      else {
+        current -= lastWordLength + 1;
+      }
+    //}
+    //else {
+    //  current -= width;
+    //}
   }
 
   if(*lastLineOffset == NULL || (*lastLineOffset)->value < current) {
@@ -455,6 +486,7 @@ int drawScreen(
   int notLastLine = TRUE;
   int leftMargin = 0;
   int i;
+  int doTparm = FALSE;
 
   if(startLine == previousLine + 1) {
     printf(navDelete);
@@ -469,9 +501,18 @@ int drawScreen(
   }
   else if(topLineOffset) {
     if(startLine != previousLine && topLineOffset->previous) {
+      /* scroll up */
       topLineOffset = topLineOffset->previous;
       fseek(input, topLineOffset->value, SEEK_SET);
       putp(cursor_home);
+
+      /* if the insert line terminal capability is available then use it */
+      if(TRUE) {
+        putp(insert_line);
+        putp(cursor_home);
+
+        doTparm = TRUE;
+      }
 
       freeAndZero(lastWord);
       lastWordLength = 0;
@@ -506,7 +547,8 @@ int drawScreen(
           &lastLineOffset,
           input,
           startLine+currentLine,
-          lastWordLength
+          lastWordLength,
+          virtualWidth
         );
 
       notLastLine = getLine(
@@ -518,33 +560,56 @@ int drawScreen(
           &lastWordLength
         );
 
-      for(i = 0; i < width + leftOffset - leftMargin; i++) {
-        if(i == 0 && leftMargin) {
-          for(; i < leftMargin; i++) {
-            fputc(' ', stdout);
-          }
+      if(!doTparm || currentLine == 0) {
+        /*if the first line starts with a very long word print it anyway */
+        if(lineLength == 0 && lastWordLength > width) {
+          getLine(
+            input,
+            virtualWidth,
+            &line,
+            &lineLength,
+            &lastWord,
+            &lastWordLength
+          );
 
-          i = 0;
+          if(doTparm) {
+            currentLine--;
+          }
         }
 
-        if(i >= leftOffset) {
-          if(i < lineLength) {
-            fputc(line[i], stdout);
+        for(i = 0; i < width + leftOffset - leftMargin; i++) {
+          if(i == 0 && leftMargin) {
+            for(; i < leftMargin; i++) {
+              fputc(' ', stdout);
+            }
+
+            i = 0;
           }
-          else {
-            fputc(' ', stdout);
+
+          if(i >= leftOffset) {
+            if(i < lineLength) {
+              fputc(line[i], stdout);
+            }
+            else {
+              fputc(' ', stdout);
+            }
           }
         }
       }
     }
   }
 
+  /* if the topLineOffset has never been set then set it */
   if(topLineOffset == NULL) {
     topLineOffset = lastLineOffset;
 
     while(topLineOffset->previous) {
       topLineOffset = topLineOffset->previous;
     }
+  }
+
+  if(doTparm) {
+    tputs(tparm(cursor_address, height, 0), 1, putchar);
   }
 
   printf(navMessage);
