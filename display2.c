@@ -25,7 +25,7 @@
   #define TRUE !FALSE
 #endif
 
-struct termios oldterm;
+struct termios oldTerm;
 volatile int termResized;
 int maxLength = 0;
 char *sequence = NULL;
@@ -39,14 +39,14 @@ struct entry {
 struct entry sequences[8];
 
 int setupTermios() {
-  struct termios newterm;
+  struct termios newTerm;
 
-  tcgetattr(STDIN_FILENO, &oldterm);
-  newterm = oldterm;
+  tcgetattr(STDIN_FILENO, &oldTerm);
+  newTerm = oldTerm;
 
-  newterm.c_lflag &= ~(ICANON | ECHO);
+  newTerm.c_lflag &= ~(ICANON | ECHO);
 
-  tcsetattr(STDIN_FILENO, TCSANOW, &newterm);
+  tcsetattr(STDIN_FILENO, TCSANOW, &newTerm);
 
   return TRUE;
 }
@@ -56,10 +56,12 @@ void sigwinchHandler(int sig) {
 }
 
 void exitTermios(void) {
-  tcsetattr(STDIN_FILENO, TCSANOW, &oldterm);
+  tcsetattr(STDIN_FILENO, TCSANOW, &oldTerm);
   tcflush(STDIN_FILENO, TCIFLUSH);
 
   free(sequence);
+
+  fputc('\n', stdout);
 }
 
 void intHandler(int dummy) {
@@ -112,7 +114,8 @@ int kbhit(void) {
   return byteswaiting > 0;
 }
 
-/* only returns resize pseudo key, arrow keys, home, end, page-up, page-down or escape */
+/* only returns resize pseudo key, arrow keys, home, end, page-up,
+page-down or escape */
 int mygetch() {
   int temp;
   int i = 0;
@@ -244,7 +247,8 @@ int strAppend(char c, char **value, int *strSize) {
   /* increment strSize */
   if(strSize != NULL) {
     if(value != NULL) {
-      /* continue to use realloc directly here as reallocMsg can call strAppend itself indirectly */
+      /* continue to use realloc directly here as reallocMsg can
+      call strAppend itself indirectly */
       if((temp = realloc(*value, (*strSize)+1)) != NULL) {
         *value = temp;
 
@@ -270,6 +274,41 @@ int lineLength = 0;
 char * lastWord = NULL;
 int lastWordLength = 0;
 
+void maintainLineOffsets(
+    struct offsets ** lastLineOffset,
+    FILE * input,
+    int lineNumber,
+    int lastWordLength,
+    int width
+) {
+  struct offsets * temp = NULL;
+
+  long current = ftell(input);
+
+  if(lastWordLength) {
+    if(lastWordLength <= width && lastWord[lastWordLength-1] == '\n') {
+      current -= lastWordLength;
+    }
+    else {
+      current -= lastWordLength + 1;
+    }
+  }
+
+  if(*lastLineOffset == NULL || (*lastLineOffset)->value < current) {
+    reallocMsg(&temp, sizeof(struct offsets));
+    temp->value = current;
+    temp->previous = *lastLineOffset;
+    temp->number = lineNumber;
+    temp->next = NULL;
+
+    if(*lastLineOffset) {
+      (*lastLineOffset)->next = temp;
+    }
+
+    *lastLineOffset = temp;
+  }
+}
+
 int getLine(
     FILE * input,
     int width,
@@ -289,7 +328,7 @@ int getLine(
 
   /* add the characters from last word if there are any,
   break very long words */
-  if(*lastWordLength != 0) {
+  if(*lastWordLength != 0 && (*lastWord)[0] != '\n') {
     if(*lastWordLength <= width) {
       if((*lastWord)[(*lastWordLength) - 1] == '\n') {
         notFirstWordOnLine = 1;
@@ -325,13 +364,19 @@ int getLine(
             &lastLineOffset,
             input,
             lastLineOffset->number+1,
-            lastWordLength,
+            *lastWordLength,
             width
           );
       }
 
       return TRUE;
     }
+  }
+  else {
+    /* suppress just a new line character that wrapped
+    from the end of a long line */
+    freeAndZero(*lastWord);
+    *lastWordLength = 0;
   }
 
   /* read characters into the lastword buffer.
@@ -393,9 +438,9 @@ int getLine(
 
         /* if it doesn't fit then return the line */
         else {
-          /* if the last word has a newline after it, we'll need to
-          add a marker to exit immediatly after it the next time this
-          function is called */
+          /* if the last word has a newline after it, we need to
+          add a marker meaning we should exit immediately after it
+          the next time this function is called */
           if(gotch == '\n') {
             strAppend(gotch, lastWord, lastWordLength);
           }
@@ -414,6 +459,16 @@ int getLine(
           gotch = '?';
         }
 
+        /* Displaying utf-8 properly is hard (would probably involve converting
+        the data type of our internal string variables to char32_t) and isn't
+        necessary for us right now, so we don't bother. If any utf-8 does occur,
+        just output ? instead */
+        if(gotch > 126) {
+          while((gotch = fgetc(input)) > 126 && gotch < 192) {}
+          ungetc(gotch, input);
+          gotch = '?';
+        }
+
         /* Append the character to the new word */
         strAppend(gotch, lastWord, lastWordLength);
       } break;
@@ -423,50 +478,8 @@ int getLine(
 
 
 
-void maintainLineOffsets(
-    struct offsets ** lastLineOffset,
-    FILE * input,
-    int lineNumber,
-    int lastWordLength,
-    int width
-) {
-  struct offsets * temp = NULL;
-
-  long current = ftell(input);
-
-  if(lastWordLength) {
-    //if(lastWordLength < width) {
-      if(lastWordLength < width && lastWord[lastWordLength-1] == '\n') {
-        current -= lastWordLength;
-      }
-      else {
-        current -= lastWordLength + 1;
-      }
-    //}
-    //else {
-    //  current -= width;
-    //}
-  }
-
-  if(*lastLineOffset == NULL || (*lastLineOffset)->value < current) {
-    reallocMsg(&temp, sizeof(struct offsets));
-    temp->value = current;
-    temp->previous = *lastLineOffset;
-    temp->number = lineNumber;
-    temp->next = NULL;
-
-    if(*lastLineOffset) {
-      (*lastLineOffset)->next = temp;
-    }
-
-    *lastLineOffset = temp;
-  }
-}
-
-
-
 const char * navMessage =
-" Navigate with arrow keys ('q' to quit)";
+"Navigate with arrow keys ('q' to quit)";
 const char * navDelete  =
 "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"
 "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b";
@@ -506,7 +519,7 @@ int drawScreen(
       fseek(input, topLineOffset->value, SEEK_SET);
       putp(cursor_home);
 
-      /* if the insert line terminal capability is available then use it */
+      /* if the terminal has the insert line capability then use it */
       if(TRUE) {
         putp(insert_line);
         putp(cursor_home);
@@ -518,6 +531,7 @@ int drawScreen(
       lastWordLength = 0;
     }
     else {
+      /* The screen was resized. just redraw it in the new size */
       fseek(input, topLineOffset->value, SEEK_SET);
       putp(cursor_home);
 
@@ -526,8 +540,10 @@ int drawScreen(
     }
   }
 
+  /* The terminal screen is wider than the virtual width.
+  Add a left margin to make the text centered */
   if(virtualWidth < width) {
-    leftMargin = (((width - virtualWidth)>>1))-1;
+    leftMargin = ((width - virtualWidth) >> 1) - 1;
 
     if(leftMargin < 0) {
       leftMargin = 0;
@@ -597,6 +613,8 @@ int drawScreen(
         }
       }
     }
+
+    printf("\n");
   }
 
   /* if the topLineOffset has never been set then set it */
@@ -608,11 +626,17 @@ int drawScreen(
     }
   }
 
+  /* Did we just only repaint the top line(s) of the screen?
+  If so, just skip back to the bottom line */
   if(doTparm) {
     tputs(tparm(cursor_address, height, 0), 1, putchar);
   }
 
+  /* redisplay the navigation message (in bold) */
+  fputc(' ', stdout);
+  putp(enter_reverse_mode);
   printf(navMessage);
+  putp(exit_attribute_mode);
   fflush(stdout);
   putp(clr_eos);
 
@@ -710,7 +734,8 @@ int main(int argc, char * argv[]) {
             firstTime = TRUE; /* redraw the whole screen */
             getWindowSize(&width, &height);
 
-            for(y = height-1; y>1; y--) {
+            /* recalculate the max line */
+            for(y = height - 1; y > 1; y--) {
               if(lastLineOffset->previous) {
                 lastLineOffset = lastLineOffset->previous;
               }
@@ -758,8 +783,6 @@ int main(int argc, char * argv[]) {
         }
       } while(temp != 'q');
 
-      fputc('\n', stdout);
-
       free(line);
 
       fclose(input);
@@ -768,26 +791,3 @@ int main(int argc, char * argv[]) {
 
   return 0;
 }
-
-/* tputs(tparm(cursor_address, 18, 40), 1, my_putchar); * /
-
-#include <stdio.h>
-#include <conio.h>
-
-int main(int argc, char * argv[]) {
-  int temp;
-
-  while((temp = getch()) != 'q') {
-    if(!kbhit() && temp == 27) {
-      printf("ESC\n");
-    }
-    else {
-      printf("%d\n", temp);
-    }
-  }
-
-  return 0;
-}
-*/
-
-
