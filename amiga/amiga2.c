@@ -236,7 +236,7 @@ void maintainLineOffsets(
   }
 
   if(*lastLineOffset == NULL || (*lastLineOffset)->value < current) {
-    reallocMsg(&temp, sizeof(struct offsets));
+    reallocMsg((void **)&temp, sizeof(struct offsets));
     temp->value = current;
     temp->previous = *lastLineOffset;
     temp->number = lineNumber;
@@ -262,7 +262,7 @@ int getLine(
   int notFirstWordOnLine = 0;
 
   if(*line == NULL) {
-    reallocMsg(line, width + 1);
+    reallocMsg((void **)line, width + 1);
   }
 
   *lineLength = 0;
@@ -276,7 +276,7 @@ int getLine(
         (*lastWordLength) = (*lastWordLength) - 1;
       }
 
-      reallocMsg(line, (*lastWordLength)+1);
+      reallocMsg((void**)line, (*lastWordLength)+1);
       memcpy(*line, *lastWord, *lastWordLength);
       (*line)[*lastWordLength] = '\0';
       *lineLength = *lineLength + *lastWordLength;
@@ -291,7 +291,7 @@ int getLine(
       notFirstWordOnLine = 1;
     }
     else {
-      reallocMsg(line, width+1);
+      reallocMsg((void **)line, width+1);
       memcpy(*line, *lastWord, width);
       (*line)[width] = '\0';
       *lineLength = width;
@@ -347,7 +347,7 @@ int getLine(
         /* if the lastWord fits then add it */
         if((*lineLength + 1 /* for space char */ + *lastWordLength) <= width) {
           reallocMsg(
-              line,
+              (void **)line,
               *lineLength + *lastWordLength +
               notFirstWordOnLine /* for space char*/ +
               1 /* for null termination */
@@ -519,7 +519,7 @@ int drawScreen(
 
       if(!doTparm || currentLine == 0) {
         /*if the first line starts with a very long word print it anyway */
-        if(lineLength == 0 && lastWordLength > width) {
+        if(doTparm && lineLength == 0 && lastWordLength > width) {
           getLine(
             input,
             virtualWidth,
@@ -529,7 +529,7 @@ int drawScreen(
             &lastWordLength
           );
 
-          if(doTparm) {
+          if(lastWordLength) {
             currentLine--;
           }
         }
@@ -554,8 +554,6 @@ int drawScreen(
         }
       }
     }
-
-    printf("\n");
   }
 
   /* if the topLineOffset has never been set then set it */

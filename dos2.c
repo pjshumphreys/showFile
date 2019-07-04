@@ -475,7 +475,7 @@ int drawScreen(
 
       if(!doTparm || currentLine == 0) {
         /*if the first line starts with a very long word print it anyway */
-        if(lineLength == 0 && lastWordLength > width) {
+        if(doTparm && lineLength == 0 && lastWordLength > width) {
           getLine(
             input,
             virtualWidth,
@@ -485,7 +485,7 @@ int drawScreen(
             &lastWordLength
           );
 
-          if(doTparm) {
+          if(lastWordLength) {
             currentLine--;
           }
         }
@@ -511,7 +511,6 @@ int drawScreen(
       }
     }
     fflush(stdout);
-    //printf("\n");
   }
 
   /* if the topLineOffset has never been set then set it */

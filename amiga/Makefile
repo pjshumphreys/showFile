@@ -1,7 +1,7 @@
 VBCC = /opt/vbcc
 CC = export VBCC=$(VBCC); export PATH=$(VBCC)/bin:$(PATH); vc
 CFLAGS =
-SOURCES = amiga.c
+SOURCES = amiga2.c
 OBJECTS = $(SOURCES:%.c=%.o)
 INCFLAGS = -I$(VBCC)/NDK_3.9/Include/include_h
 LDFLAGS = -L$(VBCC)/targets/m68k-kick13/lib/ -DAMIGA
