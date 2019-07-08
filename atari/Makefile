@@ -1,7 +1,7 @@
 VBCC = /opt/vbcc
 CC = export VBCC=$(VBCC); export PATH=$(VBCC)/bin:$(PATH); vc
 CFLAGS =
-SOURCES = atarist.c
+SOURCES = atarist2.c
 OBJECTS = $(SOURCES:%.c=%.o)
 INCFLAGS =
 LDFLAGS = -DATARI

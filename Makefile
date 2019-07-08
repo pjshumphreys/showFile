@@ -16,9 +16,9 @@ term16.exe: dos2.c
 	wcl /ml /zt1900 /dMICROSOFT=1 /fpc /0 /os /k3000 /fe=term16 dos2.c
 	c:\upx\upx --8086 .\term16.exe
 
-term.exe: win32.c
+term.exe: win32a.c
 	del term.exe
-	wcl386 -bcl=nt /os /fe=term win32.c
+	wcl386 -bcl=nt /os /fe=term win32a.c
 	c:\upx\upx .\term.exe
 
 term.arm: display2.c

@@ -1,86 +1,267 @@
+#include <windows.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <conio.h>
 
 #define CSI "\033["
-#define FALSE 0
-#define TRUE !FALSE
+#ifndef TRUE
+  #define FALSE 0
+  #define TRUE !FALSE
+#endif
 
+#define KEY_UP 294
+#define KEY_DOWN 296
+#define KEY_LEFT 293
+#define KEY_RIGHT 295
 #define KEY_RESIZE 800
-#define KEY_UP 321
-#define KEY_DOWN 322
-#define KEY_LEFT 324
-#define KEY_RIGHT 323
-
+int width = 0;
+int height = 0;
+int gotch = 0;
+int smart;
 
 #define cursor_home 0
 #define insert_line 1
 #define enter_reverse_mode 2
 #define exit_attribute_mode 3
 #define clr_eos 4
+#define clr_eol 5
 
-FILE foo;
-FILE* stdin2;
+HANDLE inputHandle;
+HANDLE outputHandle;
+INPUT_RECORD record[500];
+DWORD numRead;
 
-int parseCursorLocation(int *x, int * y) {
-  int temp, i, arr[2];
+int isNotWine() {
+  static const char *(CDECL *pwine_get_version)(void);
+  HMODULE hntdll = GetModuleHandle("ntdll.dll");
 
-  temp = fgetc(stdin2);
-
-  if(temp == 27 || temp == 155) {
-    /* skip [*/
-    if(temp == 27) {
-      fgetc(stdin2);
-    }
-
-    for(i = 0; i != 2; i++) {
-      arr[i] = 0;
-
-      do {
-        temp = fgetc(stdin2);
-
-        if(temp > 47 && temp < 58) { /* quit if not a digit */
-          arr[i] = arr[i] * 10 + temp - 48;
-        }
-        else {
-          break;
-        }
-      } while (1);
-    }
-
-    *x = arr[1];
-    *y = arr[0];
-
+  if(!hntdll) {
     return TRUE;
+  }
+
+  pwine_get_version = (void *)GetProcAddress(hntdll, "wine_get_version");
+
+  if(pwine_get_version) {
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+int pollWindowSize() {
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  int columns, rows;
+  COORD home;
+  DWORD nc, ncw;
+  int retval = FALSE;
+
+  GetConsoleScreenBufferInfo(outputHandle, &csbi);
+  columns = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+  rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+
+  if(width != 0) {
+    retval = TRUE;
+  }
+
+  if(width == 0 || columns != width || rows != height) {
+    width = columns;
+    height = rows;
+
+    nc = csbi.dwSize.X * csbi.dwSize.Y;
+
+    home.X = columns+1;
+    home.Y = rows+1;
+
+    SetConsoleScreenBufferSize(
+     outputHandle,
+     home
+    );
+
+    home.X = home.Y = 0;
+
+    FillConsoleOutputAttribute(outputHandle, csbi.wAttributes, nc, home, &ncw);
+    FillConsoleOutputCharacter(outputHandle, ' ', nc, home, &ncw);
+
+    return retval;
   }
 
   return FALSE;
 }
 
+int getWindowSize(int * x, int * y) {
+  if(width == 0) {
+    pollWindowSize();
+  }
+
+  *y = height;
+  *x = width;
+
+  return TRUE;
+}
+
+int ProcessStdin(void) {
+  int blah;
+
+  if(!ReadConsoleInput(inputHandle, &record, smart?1:500, &numRead)) {
+    // hmm handle this error somehow...
+    return 0;
+  }
+
+  if(record[0].EventType != KEY_EVENT) {
+    // don't care about other console events
+    return 0;
+  }
+
+  if(!record[0].Event.KeyEvent.bKeyDown) {
+    // really only care about keydown
+    return 0;
+  }
+
+  blah = record[0].Event.KeyEvent.uChar.AsciiChar;
+
+  if(blah > 31) {
+    return blah;
+  }
+
+  blah = record[0].Event.KeyEvent.wVirtualKeyCode;
+
+  switch(blah) {
+    case VK_BACK:
+    case VK_TAB:
+    case VK_ESCAPE:
+    case VK_PAUSE:
+      return blah;
+
+    case VK_NUMLOCK:
+    case VK_SCROLL:
+    case VK_LSHIFT:
+    case VK_RSHIFT:
+    case VK_LCONTROL:
+    case VK_RCONTROL:
+    case VK_LMENU:
+    case VK_RMENU:
+    case 0xe3:
+    case 0:
+      return 0;
+
+    default:
+      if(blah > 31) {
+        return blah+256;
+      }
+
+      return 0;
+  }
+}
+
+int mygetch() {
+  int temp;
+
+  if(gotch) {
+    temp = gotch;
+    gotch = 0;
+    return temp;
+  }
+
+  do {
+    switch(WaitForSingleObject(inputHandle, 300)) {
+      case WAIT_TIMEOUT: { /* timeout */
+        if(pollWindowSize()) {
+          return KEY_RESIZE;
+        }
+
+        if(!smart) {
+          temp = ProcessStdin();
+
+          if(temp) {
+            if(pollWindowSize()) {
+              gotch = temp;
+              return KEY_RESIZE;
+            }
+
+            return temp;
+          }
+        }
+      } break;
+
+      case WAIT_OBJECT_0: { /* stdin at array index 0 */
+        smart = TRUE;
+
+        temp = ProcessStdin();
+
+        if(temp) {
+          if(pollWindowSize()) {
+            gotch = temp;
+            return KEY_RESIZE;
+          }
+
+          return temp;
+        }
+      } break;
+    }
+  } while(1);
+}
+
 void moveCursor(int x, int y) {
-  printf(CSI "%d;%dH", y+1, x+1);
-  fflush(stdout);
+  COORD cursorPosition;
+
+  cursorPosition.X = x;
+  cursorPosition.Y = y;
+
+  SetConsoleCursorPosition(outputHandle, cursorPosition);
+}
+
+void scrollDown(int width, int height) {
+  SMALL_RECT srctScrollRect, srctClipRect;
+  CHAR_INFO chiFill;
+  COORD coordDest;
+
+  srctScrollRect.Top = 1;
+  srctScrollRect.Bottom = 2;
+  srctScrollRect.Left = 0;
+  srctScrollRect.Right = width-1;
+
+  chiFill.Attributes = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+  chiFill.Char.AsciiChar = ' ';
+
+  coordDest.X = 0;
+  coordDest.Y = 1;
+
+  srctClipRect = srctScrollRect;
+
+  ScrollConsoleScreenBuffer(
+      outputHandle,         // screen buffer handle
+      &srctScrollRect, // scrolling rectangle
+      NULL,   // clipping rectangle
+      coordDest,       // top left destination cell
+      &chiFill
+    );
 }
 
 void putp(int code) {
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  COORD home;
+  DWORD nc, ncw;
+
   switch(code) {
     case insert_line: {
-      printf(CSI "L");
+      GetConsoleScreenBufferInfo(outputHandle, &csbi);
+      home.X = 0;
+      home.Y = 0;
+      FillConsoleOutputCharacter(outputHandle, ' ', csbi.dwSize.X, home, &ncw);
+      printf("\n");
       fflush(stdout);
     } break;
 
     case cursor_home: {
-      printf(CSI "H");
-      fflush(stdout);
+      moveCursor(0, 1);
     } break;
 
     case enter_reverse_mode: {
-      printf(CSI "7m");
+      printf(CSI "p");
       fflush(stdout);
     } break;
 
     case exit_attribute_mode: {
-      printf(CSI "0m");
+      printf(CSI "q");
       fflush(stdout);
     } break;
 
@@ -88,60 +269,15 @@ void putp(int code) {
       printf(CSI "J");
       fflush(stdout);
     } break;
+
+    case clr_eol: {
+      GetConsoleScreenBufferInfo(outputHandle, &csbi);
+      nc = csbi.dwSize.X - csbi.dwCursorPosition.X;
+      FillConsoleOutputCharacter(outputHandle, ' ', nc, csbi.dwCursorPosition, &ncw);
+      fflush(stdout);
+    } break;
   }
 }
-
-int mygetch() {
-  int temp, arr = 0;
-  int i = 0;
-  int currentItem = 0;
-  int retval = 0;
-
-  do {
-    temp = fgetc(stdin2);
-
-    if(temp == 155) {
-      i = 0;
-      arr = 0;
-
-      do {
-        do {
-          temp = fgetc(stdin2);
-
-          if(temp > 47 && temp < 58) { /* quit if not a digit */
-            if(i == 0) {
-              arr = arr * 10 + temp - 48;
-            }
-          }
-          else {
-            break;
-          }
-        } while (1);
-
-        i++;
-      } while (temp == 59);
-
-      if(i == 8 && arr == 12) {
-        retval = KEY_RESIZE;
-      }
-      else {
-        if(temp == 63) {
-          fgetc(stdin2);
-        }
-
-        retval = temp + 256;
-      }
-    }
-    else if(temp) {
-      if(temp > 31 || temp == 27 || temp == 8 || temp == 9 || temp == 13) {
-        retval = temp;
-      }
-    }
-  } while(retval == 0);
-
-  return retval;
-}
-
 
 #define freeAndZero(p) { free(p); p = 0; }
 
@@ -262,7 +398,7 @@ int getLine(
   int notFirstWordOnLine = 0;
 
   if(*line == NULL) {
-    reallocMsg((void **)line, width + 1);
+    reallocMsg((void**)line, width + 1);
   }
 
   *lineLength = 0;
@@ -291,7 +427,7 @@ int getLine(
       notFirstWordOnLine = 1;
     }
     else {
-      reallocMsg((void **)line, width+1);
+      reallocMsg((void**)line, width+1);
       memcpy(*line, *lastWord, width);
       (*line)[width] = '\0';
       *lineLength = width;
@@ -347,7 +483,7 @@ int getLine(
         /* if the lastWord fits then add it */
         if((*lineLength + 1 /* for space char */ + *lastWordLength) <= width) {
           reallocMsg(
-              (void **)line,
+              (void**)line,
               *lineLength + *lastWordLength +
               notFirstWordOnLine /* for space char*/ +
               1 /* for null termination */
@@ -439,7 +575,7 @@ int drawScreen(
   int currentLine = 0;
   int notLastLine = TRUE;
   int leftMargin = 0;
-  int i;
+  int i,j;
   int doTparm = FALSE;
 
   if(startLine == previousLine + 1) {
@@ -461,12 +597,8 @@ int drawScreen(
       putp(cursor_home);
 
       /* if the terminal has the insert line capability then use it */
-      if(TRUE) {
-        putp(insert_line);
-        putp(cursor_home);
-
-        doTparm = TRUE;
-      }
+      putp(insert_line);
+      putp(cursor_home);
 
       freeAndZero(lastWord);
       lastWordLength = 0;
@@ -552,11 +684,14 @@ int drawScreen(
             }
           }
         }
-
-        fflush(stdout);
+printf("\n", stdout);
+        //
       }
     }
   }
+
+  fflush(stdout);
+
 
   /* if the topLineOffset has never been set then set it */
   if(topLineOffset == NULL) {
@@ -567,6 +702,10 @@ int drawScreen(
     }
   }
 
+
+
+
+
   /* Did we just only repaint the top line(s) of the screen?
   If so, just skip back to the bottom line */
   if(doTparm) {
@@ -575,11 +714,11 @@ int drawScreen(
 
   /* redisplay the navigation message (in bold) */
   fputc(' ', stdout);
-  putp(enter_reverse_mode);
+  //putp(enter_reverse_mode);
   printf(navMessage);
-  putp(exit_attribute_mode);
-  putp(clr_eos);
+  //putp(exit_attribute_mode);
   fflush(stdout);
+  putp(clr_eol);
 
   if(notLastLine && startLine == *maxLine) {
     (*maxLine)++;
@@ -588,17 +727,18 @@ int drawScreen(
   return 0;
 }
 
-int main(int argc, char** argv) {
-  int origx = 0;
-  int origy = 0;
-  int temp, y;
-
+int main(char argc, char* argv[]) {
   FILE * input;
 
-  int width = 0;
-  int height = 0;
+  int width = 80;
+  int height = 24;
 
   int leftOffset = 0;
+
+  int errret = 0;
+  int temp = 0;
+  int x;
+  int y;
 
   int virtualWidth = 80;
 
@@ -608,48 +748,10 @@ int main(int argc, char** argv) {
   int firstTime = TRUE;
 
 
-  FILE* fp;
-
-  /*
-  if(argc != 0) {
-    return 0;
-  }
-  */
-
-  /* point the file pointer at global memory as it will
-  be properly cleaned up even if ctrl-c if pressed. */
-  stdin2 = &foo;
-
-  /* open console for reading and writing so that we can prevent the console window
-  from closing until enter has been pressed */
-  if((fp = freopen("RAW:30/30/502/173/QueryCSV", "a+", stdout)) == NULL) {
-    return 0;
-  }
-
-  /* Hack to get keystrokes from the same console window by
-  reusing the buffers set up for stdin. This makes stdin itself unusable,
-  but doesn't crash even if ctrl-c is pressed. This is because no files
-  were (re)opened, so none will be closed */
-  memcpy(stdin2, stdin, sizeof(FILE));
-  stdin2->filehandle = stdout->filehandle;
-
-  /* enable the raw events so we can be notified
-  if the window is resized */
-  fputs(CSI "12{" CSI "6n", stdout);
-  fflush(stdout);
-
-  parseCursorLocation(&origx, &origy);
-
-  /* attempt to move the cursor to 255, 255 then get the cursor position
-  again. This will get limited to the terminal's actual size*/
-  printf(CSI "255;255H" CSI "6n");
-  fflush(stdout);
-
-  parseCursorLocation(&width, &height);
-
-  /* reposition the cursor  */
-  printf(CSI "%d;%dH", origy, origx);
-  fflush(stdout);
+  inputHandle = GetStdHandle(STD_INPUT_HANDLE);
+  outputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+  SetConsoleMode(inputHandle, 0);
+  smart = isNotWine();
 
   input = fopen("testfile.txt", "rb");
 
@@ -657,6 +759,8 @@ int main(int argc, char** argv) {
     fputs("file couldn't be opened\n", stdout);
     return 0;
   }
+
+  getWindowSize(&width, &height);
 
   if(width < 80) {
     virtualWidth = width;
@@ -686,22 +790,7 @@ int main(int argc, char** argv) {
       case KEY_RESIZE: {
         leftOffset = 0;
         firstTime = TRUE; /* redraw the whole screen */
-
-        fputs(CSI "6n", stdout);
-        fflush(stdout);
-
-        parseCursorLocation(&origx, &origy);
-
-        /* attempt to move the cursor to 255, 255 then get the cursor position
-        again. This will get limited to the terminal's actual size*/
-        printf(CSI "255;255H" CSI "6n");
-        fflush(stdout);
-
-        parseCursorLocation(&width, &height);
-
-        /* reposition the cursor  */
-        printf(CSI "%d;%dH", origy, origx);
-        fflush(stdout);
+        getWindowSize(&width, &height);
 
         /* recalculate the max line */
         for(y = height - 1; y > 1; y--) {

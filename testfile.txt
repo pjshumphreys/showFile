@@ -31,10 +31,17 @@ Now create a second file called departments.csv with the following contents:
 
 Then create a file called getEngineers.qry to specify the data you want to retrieve:
 
-  select a.lastName as surname, b.DepartmentName as department
-  from 'employees.csv' as a
-  join 'departments.csv' as b on b.DepartmentID = a.DepartmentID
-  where a.DepartmentID = 33
+  select
+    a.lastName as Surname,
+    b.DepartmentName as Department
+  from
+    'employees.csv' as a
+  join
+    'departments.csv' as b
+  on
+    b.DepartmentID = a.DepartmentID
+  where
+    a.DepartmentID = 33
 
 Finally, on the command line run the query against the data files using the following command:
 
@@ -42,9 +49,9 @@ Finally, on the command line run the query against the data files using the foll
 
 After this, the following output will be produced:
 
-  surname, department
-  Jones, Engineering
-  Heisenberg, Engineering
+  Surname,Department
+  Jones,Engineering
+  Heisenberg,Engineering
 
 
 Why?
