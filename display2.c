@@ -25,6 +25,8 @@
   #define TRUE !FALSE
 #endif
 
+
+
 struct termios oldTerm;
 volatile int termResized;
 int maxLength = 0;

@@ -401,18 +401,17 @@ int drawScreen(
       topLineOffset = topLineOffset->previous;
       fseek(input, topLineOffset->value, SEEK_SET);
 
-
       /* if the terminal has the insert line capability then use it */
-      /* if(TRUE) { */
-      moveCursor(0, height-1);
-      for(i = 0; i < width; i++){
-        printf(ZV);
+      moveCursor(0, height-2);
+
+      for(i = 0; i < width; i++) {
+        putchar(' ');
       }
+
       putp(cursor_home);
       putp(insert_line);
 
-        doTparm = TRUE;
-      /*}*/
+      doTparm = TRUE;
 
       freeAndZero(lastWord);
       lastWordLength = 0;

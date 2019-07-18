@@ -204,6 +204,7 @@ char* getenv(char* name) {
   FILE* envFile;
   int gotch;
   char* temp;
+
   unsigned char found = FALSE;
   struct envVar* tempEnv = NULL;
 
@@ -405,6 +406,8 @@ int main(int argc, char * argv[]) {
   const char * cenv = "COLUMNS";
   const char * lenv = "LINES";
   char * temp = NULL;
+  int temp2;
+  int temp3 = 1;
 
   mallinit();
   sbrk(30000, 1000);
@@ -499,6 +502,18 @@ int main(int argc, char * argv[]) {
   }
 
   printf("x: %d, y: %d\n", x, y);
+
+  do {
+    temp2 = getch();
+
+    printf("%d\n", temp2);
+
+    if(temp2 == 1) {
+      printf("%d\n", temp3);
+      putchar(temp3++);
+    }
+
+  } while(temp2 != 'q');
 
   return EXIT_SUCCESS;
 }

@@ -11,6 +11,9 @@ WATCOM = ~/.wine/drive_c/WATCOM
 
 all: term.arm term.x64 term.386
 
+TERM.COM: cpm2.c
+	zcc +cpm cpm2.c -o TERM.COM
+
 term16.exe: dos2.c
 	del term16.exe
 	wcl /ml /zt1900 /dMICROSOFT=1 /fpc /0 /os /k3000 /fe=term16 dos2.c
@@ -28,9 +31,9 @@ term.arm: display2.c
 	upx term
 	mv term term.arm
 
-term.x64: posix.c
+term.x64: display2.c
 	rm -f term.x64
-	/usr/local/musl/bin/musl-gcc -o term -static -Os -O2 -fmax-errors=20 -Wl,-O,-s,--gc-sections posix.c /usr/local/musl/lib/libncursesw.a
+	/usr/local/musl/bin/musl-gcc -o term -static -Os -O2 -fmax-errors=20 -Wl,-O,-s,--gc-sections display2.c /usr/local/musl/lib/libncursesw.a
 	strip --remove-section=.eh_frame --remove-section=.comment ./term
 	upx term
 	mv term term.x64
