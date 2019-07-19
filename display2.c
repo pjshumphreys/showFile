@@ -208,8 +208,8 @@ int getWindowSize() {
     return FALSE;
   }
 
-  width = ws.ws_row;
-  height = ws.ws_col;
+  width = ws.ws_col;
+  height = ws.ws_row;
 
   return TRUE;
 }
@@ -620,7 +620,7 @@ int drawScreen(
   /* Did we just only repaint the top line(s) of the screen?
   If so, just skip back to the bottom line */
   if(doTparm) {
-    moveCursor(0, height-1);
+    moveCursor(0, height - 1);
   }
 
   /* redisplay the navigation message (in bold) */
