@@ -209,7 +209,7 @@ void moveCursor(int x, int y) {
   }
 }
 
-int getWindowSize(int * x, int * y) {
+int getWindowSize() {
   int origx, origy;
 
   /* clear the keyboard buffer */
@@ -229,7 +229,7 @@ int getWindowSize(int * x, int * y) {
     printf(CSI "255;255H" CSI "6n");
     fflush(stdout);
 
-    parseCursorLocation(x, y);
+    parseCursorLocation(&width, &height);
 
     /* reposition the cursor */
     moveCursor(origx, origy);
@@ -239,7 +239,7 @@ int getWindowSize(int * x, int * y) {
   else {
     /* The console doesn't support vt100 control codes.
     Use interupt 10h services the control it instead */
-    noAnsi(x, y);
+    noAnsi(&width, &height);
   }
 
   return TRUE;
@@ -310,18 +310,16 @@ void putp(int code) {
 }
 
 void maintainLineOffsets(
-    struct offsets ** lastLineOffset,
     FILE * input,
     int lineNumber,
-    int lastWordLength,
-    int width
+    int virtualWidth
 ) {
   struct offsets * temp = NULL;
 
   long current = ftell(input);
 
   if(lastWordLength) {
-    if(lastWordLength <= width && lastWord[lastWordLength-1] == '\n') {
+    if(lastWordLength <= virtualWidth && lastWord[lastWordLength-1] == '\n') {
       current -= lastWordLength;
     }
     else {
@@ -329,54 +327,50 @@ void maintainLineOffsets(
     }
   }
 
-  if(*lastLineOffset == NULL || (*lastLineOffset)->value < current) {
+  if(lastLineOffset == NULL || lastLineOffset->value < current) {
     reallocMsg((void **)&temp, sizeof(struct offsets));
     temp->value = current;
-    temp->previous = *lastLineOffset;
+    temp->previous = lastLineOffset;
     temp->number = lineNumber;
     temp->next = NULL;
 
-    if(*lastLineOffset) {
-      (*lastLineOffset)->next = temp;
+    if(lastLineOffset) {
+      lastLineOffset->next = temp;
     }
 
-    *lastLineOffset = temp;
+    lastLineOffset = temp;
   }
 }
 
 int getLine(
     FILE * input,
-    int width,
-    char ** line,
-    int * lineLength,
-    char ** lastWord,
-    int * lastWordLength
+    int virtualWidth
 ) {
   int gotch = 0;
   int notFirstWordOnLine = 0;
 
-  if(*line == NULL) {
-    reallocMsg((void**)line, width + 1);
+  if(line == NULL) {
+    reallocMsg((void**)&line, virtualWidth + 1);
   }
 
-  *lineLength = 0;
+  lineLength = 0;
 
   /* add the characters from last word if there are any,
   break very long words */
-  if(*lastWordLength != 0 && (*lastWord)[0] != '\n') {
-    if(*lastWordLength <= width) {
-      if((*lastWord)[(*lastWordLength) - 1] == '\n') {
+  if(lastWordLength != 0 && lastWord[0] != '\n') {
+    if(lastWordLength <= virtualWidth) {
+      if(lastWord[lastWordLength - 1] == '\n') {
         notFirstWordOnLine = 1;
-        (*lastWordLength) = (*lastWordLength) - 1;
+        lastWordLength = lastWordLength - 1;
       }
 
-      reallocMsg((void**)line, (*lastWordLength)+1);
-      memcpy(*line, *lastWord, *lastWordLength);
-      (*line)[*lastWordLength] = '\0';
-      *lineLength = *lineLength + *lastWordLength;
+      reallocMsg((void**)&line, lastWordLength+1);
+      memcpy(line, lastWord, lastWordLength);
+      line[lastWordLength] = '\0';
+      lineLength = lineLength + lastWordLength;
 
-      freeAndZero(*lastWord);
-      *lastWordLength = 0;
+      freeAndZero(lastWord);
+      lastWordLength = 0;
 
       if(notFirstWordOnLine == 1) {
         return TRUE;
@@ -385,22 +379,20 @@ int getLine(
       notFirstWordOnLine = 1;
     }
     else {
-      reallocMsg((void**)line, width+1);
-      memcpy(*line, *lastWord, width);
-      (*line)[width] = '\0';
-      *lineLength = width;
+      reallocMsg((void**)&line, virtualWidth+1);
+      memcpy(line, lastWord, virtualWidth);
+      line[virtualWidth] = '\0';
+      lineLength = virtualWidth;
 
       /* memmove the characters down */
-      memmove(*lastWord, (*lastWord)+width, *lastWordLength+1-width);
-      *lastWordLength -= width;
+      memmove(lastWord, lastWord+virtualWidth, lastWordLength+1-virtualWidth);
+      lastWordLength -= virtualWidth;
 
-      if(*lastWordLength && lastLineOffset->next == NULL) {
+      if(lastWordLength && lastLineOffset->next == NULL) {
         maintainLineOffsets(
-            &lastLineOffset,
             input,
             lastLineOffset->number+1,
-            *lastWordLength,
-            width
+            virtualWidth
           );
       }
 
@@ -410,8 +402,8 @@ int getLine(
   else {
     /* suppress just a new line character that wrapped
     from the end of a long line */
-    freeAndZero(*lastWord);
-    *lastWordLength = 0;
+    freeAndZero(lastWord);
+    lastWordLength = 0;
   }
 
   /* read characters into the lastword buffer.
@@ -440,36 +432,36 @@ int getLine(
 
       case ' ': {
         /* if the lastWord fits then add it */
-        if((*lineLength + 1 /* for space char */ + *lastWordLength) <= width) {
+        if((lineLength + 1 /* for space char */ + lastWordLength) <= virtualWidth) {
           reallocMsg(
-              (void**)line,
-              *lineLength + *lastWordLength +
+              (void**)&line,
+              lineLength + lastWordLength +
               notFirstWordOnLine /* for space char*/ +
               1 /* for null termination */
             );
 
           if(notFirstWordOnLine) {
-            (*line)[*lineLength] = ' ';
+            line[lineLength] = ' ';
           }
 
-          (*line)[*lineLength + *lastWordLength + notFirstWordOnLine] = '\0';
+          line[lineLength + lastWordLength + notFirstWordOnLine] = '\0';
 
-          if(*lastWordLength) {
+          if(lastWordLength) {
             memcpy(
-                &((*line)[*lineLength+notFirstWordOnLine]),
-                *lastWord,
-                *lastWordLength
+                &(line[lineLength+notFirstWordOnLine]),
+                lastWord,
+                lastWordLength
               );
           }
 
-          *lineLength = *lineLength+ *lastWordLength +
+          lineLength = lineLength + lastWordLength +
               notFirstWordOnLine;
 
           notFirstWordOnLine = 1;
 
           /* set the lastWordLength to 0 */
-          freeAndZero(*lastWord);
-          *lastWordLength = 0;
+          freeAndZero(lastWord);
+          lastWordLength = 0;
         }
 
         /* if it doesn't fit then return the line */
@@ -478,7 +470,7 @@ int getLine(
           add a marker meaning we should exit immediately after it
           the next time this function is called */
           if(gotch == '\n') {
-            strAppend(gotch, lastWord, lastWordLength);
+            strAppend(gotch, &lastWord, &lastWordLength);
           }
 
           /* there are more lines to come */
@@ -506,7 +498,7 @@ int getLine(
         }
 
         /* Append the character to the new word */
-        strAppend(gotch, lastWord, lastWordLength);
+        strAppend(gotch, &lastWord, &lastWordLength);
       } break;
     }
   } while(1);
@@ -518,14 +510,12 @@ int drawScreen(
     int previousLine,
     int * maxLine,
     int virtualWidth,
-    int leftOffset,
-    int width,
-    int height
+    int leftOffset
 ) {
   int currentLine = 0;
   int notLastLine = TRUE;
   int leftMargin = 0;
-  int i,j;
+  int i;
   int doTparm = FALSE;
 
   if(startLine == previousLine + 1) {
@@ -597,20 +587,14 @@ int drawScreen(
     }
     else {
       maintainLineOffsets(
-          &lastLineOffset,
           input,
           startLine+currentLine,
-          lastWordLength,
           virtualWidth
         );
 
       notLastLine = getLine(
           input,
-          virtualWidth,
-          &line,
-          &lineLength,
-          &lastWord,
-          &lastWordLength
+          virtualWidth
         );
 
       if(!doTparm || currentLine == 0) {
@@ -618,11 +602,7 @@ int drawScreen(
         if(doTparm && lineLength == 0 && lastWordLength > width) {
           getLine(
             input,
-            virtualWidth,
-            &line,
-            &lineLength,
-            &lastWord,
-            &lastWordLength
+            virtualWidth
           );
 
           if(lastWordLength) {
@@ -704,7 +684,7 @@ int main(int argc, char * argv[]) {
     return 0;
   }
 
-  getWindowSize(&width, &height);
+  getWindowSize();
 
   /* Use dumb terminal mode if height == 0 */
   if(height == 0) {
@@ -713,11 +693,7 @@ int main(int argc, char * argv[]) {
     do {
       notLastLine = getLine(
           input,
-          width,
-          &line,
-          &lineLength,
-          &lastWord,
-          &lastWordLength
+          width
         );
 
       for(i = 0; i < width; i++) {
@@ -745,9 +721,7 @@ int main(int argc, char * argv[]) {
             previousLine,
             &maxLine,
             virtualWidth,
-            leftOffset,
-            width,
-            height
+            leftOffset
           );
 
         previousLine = currentLine;
