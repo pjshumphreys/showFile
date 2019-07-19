@@ -5,11 +5,14 @@ CC = gcc
 CFLAGS = -g -Wall
 INCFLAGS = -I/home/user/Projects/querycsv
 LDFLAGS = -Wl,-rpath,/usr/local/lib
-LIBS =
+LIBS = -lncursesw
 
 WATCOM = ~/.wine/drive_c/WATCOM
 
 all: term.arm term.x64 term.386
+
+term: display2.c
+	$(CC) -o term display2.c $(LDFLAGS) $(LIBS)
 
 TERM.COM: cpm2.c
 	zcc +cpm cpm2.c -o TERM.COM

@@ -3,6 +3,9 @@
 #include <string.h>
 #include <kernel.h>
 
+#define EXIT_FAILURE 1
+#define EXIT_SUCCESS 0
+
 #ifndef TRUE
   #define FALSE 0
   #define TRUE !FALSE
@@ -104,26 +107,43 @@ void moveCursor(int x, int y) {
   _kernel_oswrch(y);
 }
 
+const int columns[] = {
+  80, 40, 20, 80,
+  40, 20, 40, 40,
+  80
+};
+
+const int rows[] = {
+  32, 32, 32, 25,
+  32, 32, 25, 25,
+  0 /* 0 means just output all lines then quit */
+};
+
 int getWindowSize() {
-  const int columns[] = {
-    80, 40, 20, 80,
-    40, 20, 40, 40,
-    80
-  };
-
-  const int rows[] = {
-    32, 32, 32, 25,
-    32, 32, 25, 25,
-    0 /* 0 means just output all lines then quit */
-  };
-
   /* get the current screen mode and use it to figure out
   the current terminal columns and rows */
   unsigned int currentMode =
     (_kernel_osbyte(135, 0, 0) & 0xff00) >> 8;
 
-  if(currentMode > 7) {
-    currentMode = 8;
+  switch(currentMode) {
+    case 0:
+    case 1:
+    case 3:
+    case 4:
+    case 6:
+    case 7:
+      break;
+
+    case 2:
+    case 5: {
+      _kernel_oswrch(22);
+      _kernel_oswrch(6);
+      currentMode = 6;
+    } break;
+
+    default: {
+      currentMode = 8;
+    } break;
   }
 
   width = columns[currentMode];
@@ -372,7 +392,7 @@ int drawScreen(
   int doTparm = FALSE;
 
   if(startLine == previousLine + 1) {
-    putchar('\r');
+    _kernel_oswrch(13);
 
     /* scrolling thru the file normally, just display one line */
     currentLine = height - 2;
