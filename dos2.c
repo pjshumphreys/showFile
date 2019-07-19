@@ -1,105 +1,28 @@
-#include <conio.h>
 #include <stdio.h>
-#include <dos.h>
 #include <stdlib.h>
 #include <string.h>
+#include <conio.h>
+#include <dos.h>
 
 #define CSI "\033["
-#define FALSE 0
-#define TRUE !FALSE
+#ifndef TRUE
+  #define FALSE 0
+  #define TRUE !FALSE
+#endif
 
 #define KEY_UP 328
 #define KEY_DOWN 336
 #define KEY_LEFT 331
 #define KEY_RIGHT 333
 
-int useAnsi = FALSE;
-
 #define cursor_home 0
-
-void moveCursor(int x, int y) {
-  union REGS regs;
-
-  if(useAnsi) {
-    printf(CSI "%d;%dH", y+1, x+1);
-    fflush(stdout);
-  }
-  else {
-    regs.h.ah = 0x02;
-    regs.h.bh = 0;
-    regs.h.dh = y;
-    regs.h.dl = x;
-    int86(0x10, &regs, &regs);
-  }
-}
-
-void scrollDown(int width, int height) {
-  union REGS regs;
-
-  regs.h.ah = 0x07;
-  regs.h.al = 1;
-  regs.h.ch = 0;
-  regs.h.cl = 0;
-  regs.h.dh = height-1;
-  regs.h.dl = width-1;
-  regs.h.bh = 7;
-
-  int86(0x10, &regs, &regs);
-}
-
-void putp(int code) {
-  union REGS regs;
-
-  switch(code) {
-    case cursor_home: {
-      if(useAnsi) {
-        printf(CSI "H");
-        fflush(stdout);
-      }
-      else {
-        regs.h.ah = 0x02;
-        regs.h.bh = 0;
-        regs.h.dh = 0;
-        regs.h.dl = 0;
-        int86(0x10, &regs, &regs);
-      }
-    } break;
-  }
-}
-
-int mygetch() {
-  int temp;
-  int i = 0;
-  int currentItem = 0;
-  int retval = 0;
-
-  do {
-    temp = getch();
-
-    if(temp) {
-      if(temp > 31 || temp == 27 || temp == 8 || temp == 9 || temp == 13) {
-        if(temp == 127) {
-          temp = 8;
-        }
-
-        retval = temp;
-      }
-    }
-    else {
-      temp = getch();
-
-      retval =  temp + 256;
-    }
-  } while(retval == 0);
-
-  while(kbhit()) {
-    getch();
-  }
-
-  return retval;
-}
+#define insert_line 1
+#define enter_reverse_mode 2
+#define exit_attribute_mode 3
 
 #define freeAndZero(p) { free(p); p = 0; }
+
+int useAnsi = FALSE;
 
 struct offsets {
   long value;
@@ -108,16 +31,32 @@ struct offsets {
   struct offsets * next;
 };
 
+struct offsets * topLineOffset = NULL;
+struct offsets * lastLineOffset = NULL;
+int width = 0;
+int height = 0;
+char * line = NULL;
+int lineLength = 0;
+char * lastWord = NULL;
+int lastWordLength = 0;
+
 void reallocMsg(void **mem, size_t size) {
   void *temp;
 
+  temp = *mem;
+
   if(mem != NULL) {
     if(size) {
-      temp = realloc(*mem, size);
+      if(temp == NULL) {
+        temp = malloc(size);
+      }
+      else {
+        temp = realloc(temp, size);
+      }
 
       if(temp == NULL) {
-        fputs("malloc failed", stderr);
-        exit(-1);
+        fputs("malloc failed\n", stderr);
+        exit(EXIT_FAILURE);
       }
 
       *mem = temp;
@@ -128,8 +67,8 @@ void reallocMsg(void **mem, size_t size) {
     }
   }
   else {
-    fputs("invalid realloc", stderr);
-    exit(-1);
+    fputs("invalid realloc\n", stderr);
+    exit(EXIT_FAILURE);
   }
 }
 
@@ -163,13 +102,212 @@ int strAppend(char c, char **value, int *strSize) {
   return TRUE;
 }
 
-struct offsets * topLineOffset = NULL;
+int parseCursorLocation(int *x, int * y) {
+  int temp = 0, i, arr[2];
+  union REGS regs;
 
-struct offsets * lastLineOffset = NULL;
-char * line = NULL;
-int lineLength = 0;
-char * lastWord = NULL;
-int lastWordLength = 0;
+  /*stuff the keyboard buffer so we can reliably
+  call getch the first time without blocking */
+  regs.h.ah = 0x05;
+  regs.h.ch = 0x1e;
+  regs.h.cl = 0x61;
+  int86(0x16, &regs, &regs);
+
+  if(
+      kbhit()  /* kbhit will return false on computers
+      that don't have an IBM extended keyboard */
+      && getch() == 27
+  ) {
+
+    /* skip [*/
+    getch();
+
+    for(i = 0; i != 2; i++) {
+      arr[i] = 0;
+
+      do {
+        temp = getch();
+
+        if(temp > 47 && temp < 58) { /* quit if not a digit */
+          arr[i] = arr[i] * 10 + temp - 48;
+        }
+        else {
+          break;
+        }
+      } while (1);
+    }
+
+    /* consume everthing else on the input buffer */
+    while(kbhit() && (getch() != 'a')) {}
+
+    *x = arr[1];
+    *y = arr[0];
+
+    return TRUE;
+  }
+
+  return FALSE;
+}
+
+void noAnsi(int *x, int *y) {
+  int page;
+  int origy;
+  int oldy;
+  int tempy;
+  union REGS regs;
+
+  /* get the current video page */
+  regs.h.ah = 0x0f;
+  int86(0x10, &regs, &regs);
+
+  *x = regs.h.ah; /* bios returns the column count directly */
+  page = regs.h.bh; /* it also returns the active page number */
+
+  /* get the current cursor position */
+  regs.h.ah = 0x03;
+  regs.h.bh = page;
+  int86(0x10, &regs, &regs);
+
+  oldy = origy = tempy = regs.h.dh;
+
+  do {
+    printf("\n");
+
+    /* Read the current x and y. When the y value stops
+    increasing, this is how big the screen is */
+    regs.h.ah = 0x03;
+    regs.h.bh = page;
+    int86(0x10, &regs, &regs);
+
+    tempy = regs.h.dh;
+
+  } while(oldy != tempy && (oldy = tempy));
+
+  *y = tempy + 1;
+
+  regs.h.ah = 0x02;
+  regs.h.dh = origy-2;
+  regs.h.dl = 0;
+  int86(0x10, &regs, &regs);
+}
+
+void moveCursor(int x, int y) {
+  union REGS regs;
+
+  /* resync stdout before messing with the display buffer */
+  fflush(stdout);
+
+  if(useAnsi) {
+    printf(CSI "%d;%dH", y+1, x+1);
+  }
+  else {
+    regs.h.ah = 0x02;
+    regs.h.bh = 0;
+    regs.h.dh = y;
+    regs.h.dl = x;
+    int86(0x10, &regs, &regs);
+  }
+}
+
+int getWindowSize(int * x, int * y) {
+  int origx, origy;
+
+  /* clear the keyboard buffer */
+  while(kbhit()) {
+    getch();
+  }
+
+  /* test for vt100 capability */
+  printf("\n" CSI "6n\b\b\b\b");
+  fflush(stdout);
+
+  if(parseCursorLocation(&origx, &origy)) {
+    /* The console supports vt100 control codes */
+
+    /* attempt to move the cursor to 255, 255 then get the cursor position
+    again. This will get limited to the terminal's actual size*/
+    printf(CSI "255;255H" CSI "6n");
+    fflush(stdout);
+
+    parseCursorLocation(x, y);
+
+    /* reposition the cursor */
+    moveCursor(origx, origy);
+
+    useAnsi = TRUE;
+  }
+  else {
+    /* The console doesn't support vt100 control codes.
+    Use interupt 10h services the control it instead */
+    noAnsi(x, y);
+  }
+
+  return TRUE;
+}
+
+int mygetch() {
+  int temp;
+  int retval = 0;
+
+  do {
+    temp = getch();
+
+    if(temp) {
+      if(temp > 31 || temp == 27 || temp == 8 || temp == 9 || temp == 13) {
+        if(temp == 127) {
+          temp = 8;
+        }
+
+        retval = temp;
+      }
+    }
+    else {
+      temp = getch();
+
+      retval =  temp + 256;
+    }
+  } while(retval == 0);
+
+  while(kbhit()) {
+    getch();
+  }
+
+  return retval;
+}
+
+void scrollDown() {
+  union REGS regs;
+
+  regs.h.ah = 0x07;
+  regs.h.al = 1;
+  regs.h.ch = 0;
+  regs.h.cl = 0;
+  regs.h.dh = height-2;
+  regs.h.dl = width-1;
+  regs.h.bh = 7;
+
+  int86(0x10, &regs, &regs);
+}
+
+void putp(int code) {
+  union REGS regs;
+
+  switch(code) {
+    case insert_line: {
+      scrollDown();
+    } break;
+
+    case cursor_home: {
+      moveCursor(0, 0);
+    } break;
+
+    case enter_reverse_mode: {
+    } break;
+
+    case exit_attribute_mode: {
+    } break;
+  }
+}
 
 void maintainLineOffsets(
     struct offsets ** lastLineOffset,
@@ -218,7 +356,7 @@ int getLine(
   int notFirstWordOnLine = 0;
 
   if(*line == NULL) {
-    reallocMsg((void **)line, width + 1);
+    reallocMsg((void**)line, width + 1);
   }
 
   *lineLength = 0;
@@ -232,7 +370,7 @@ int getLine(
         (*lastWordLength) = (*lastWordLength) - 1;
       }
 
-      reallocMsg((void **)line, (*lastWordLength)+1);
+      reallocMsg((void**)line, (*lastWordLength)+1);
       memcpy(*line, *lastWord, *lastWordLength);
       (*line)[*lastWordLength] = '\0';
       *lineLength = *lineLength + *lastWordLength;
@@ -247,7 +385,7 @@ int getLine(
       notFirstWordOnLine = 1;
     }
     else {
-      reallocMsg((void **)line, width+1);
+      reallocMsg((void**)line, width+1);
       memcpy(*line, *lastWord, width);
       (*line)[width] = '\0';
       *lineLength = width;
@@ -297,13 +435,14 @@ int getLine(
       case '\n':
 
       case EOF:
+      case '\0':
       case '\x1a': /* CP/M end of file character */
 
       case ' ': {
         /* if the lastWord fits then add it */
         if((*lineLength + 1 /* for space char */ + *lastWordLength) <= width) {
           reallocMsg(
-              (void **)line,
+              (void**)line,
               *lineLength + *lastWordLength +
               notFirstWordOnLine /* for space char*/ +
               1 /* for null termination */
@@ -373,15 +512,6 @@ int getLine(
   } while(1);
 }
 
-
-
-const char * navMessage =
-"Navigate with arrow keys ('q' to quit)";
-const char * navDelete  =
-"\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"
-"\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b";
-
-
 int drawScreen(
     FILE* input,
     int startLine,
@@ -395,12 +525,11 @@ int drawScreen(
   int currentLine = 0;
   int notLastLine = TRUE;
   int leftMargin = 0;
-  int i;
+  int i,j;
   int doTparm = FALSE;
 
   if(startLine == previousLine + 1) {
-    printf(navDelete);
-    fflush(stdout);
+    putchar('\r');
 
     /* scrolling thru the file normally, just display one line */
     currentLine = height - 2;
@@ -415,10 +544,21 @@ int drawScreen(
       topLineOffset = topLineOffset->previous;
       fseek(input, topLineOffset->value, SEEK_SET);
 
-      /* if the terminal has the insert line capability then use it */
       if(!useAnsi) {
-        scrollDown(width, height-1);
-        fflush(stdout);
+        /* if the terminal has the insert line capability then use it */
+
+        /* clear the last but 1 line. This will become the bottom
+        line after we insert a new line. We'll print the 'move with arrow
+        keys' message over the top of this */
+        moveCursor(0, height - 2);
+
+        for(i = 0; i < width; i++) {
+          putchar(' ');
+        }
+
+        putp(cursor_home);
+        putp(insert_line);
+
         doTparm = TRUE;
       }
 
@@ -510,7 +650,6 @@ int drawScreen(
         }
       }
     }
-    fflush(stdout);
   }
 
   /* if the topLineOffset has never been set then set it */
@@ -529,12 +668,10 @@ int drawScreen(
   }
 
   /* redisplay the navigation message (in bold) */
-  fputc(' ', stdout);
-  //putp(enter_reverse_mode);
-  printf(navMessage);
-  //putp(exit_attribute_mode);
+  /* putp(enter_reverse_mode); */
+  printf("Move with arrow keys.q exits");
+  /* putp(exit_attribute_mode); */
   fflush(stdout);
-  //putp(clr_eos);
 
   if(notLastLine && startLine == *maxLine) {
     (*maxLine)++;
@@ -543,104 +680,12 @@ int drawScreen(
   return 0;
 }
 
-int parseCursorLocation(int *x, int * y) {
-  union REGS regs;
-  int temp, i, arr[2];
-
-  /*stuff the keyboard buffer so we can reliably
-  call getch the first time without blocking */
-  regs.h.ah = 0x05;
-  regs.h.ch = 0x1e;
-  regs.h.cl = 0x61;
-  int86(0x16, &regs, &regs);
-
-  if(
-    kbhit()  /* kbhit will return false on computers
-    that don't have an IBM extended keyboard */
-    && getch() == 27) {
-    /* skip [*/
-    getch();
-
-    for(i = 0; i != 2; i++) {
-      arr[i] = 0;
-
-      do {
-        temp = getch();
-
-        if(temp > 47 && temp < 58) { /* quit if not a digit */
-          arr[i] = arr[i] * 10 + temp - 48;
-        }
-        else {
-          break;
-        }
-      } while (1);
-    }
-
-    /* consume everthing else on the input buffer */
-    while(kbhit() && (getch() != 'a')) {}
-
-    *x = arr[1];
-    *y = arr[0];
-
-    return TRUE;
-  }
-
-  return FALSE;
-}
-
-void noAnsi(int *x, int *y) {
-  int page;
-  int origy;
-  int oldy;
-  int tempy;
-  union REGS regs;
-
-  /* get the current video page */
-  regs.h.ah = 0x0f;
-  int86(0x10, &regs, &regs);
-
-  *x = regs.h.ah; /* bios returns the column count directly */
-  page = regs.h.bh; /* it also returns the active page number */
-
-  /* get the current cursor position */
-  regs.h.ah = 0x03;
-  regs.h.bh = page;
-  int86(0x10, &regs, &regs);
-
-  oldy = origy = tempy = regs.h.dh;
-
-  do {
-    printf("\n");
-
-    /* Read the current x and y. When the y value stops
-    increasing, this is how big the screen is */
-    regs.h.ah = 0x03;
-    regs.h.bh = page;
-    int86(0x10, &regs, &regs);
-
-    tempy = regs.h.dh;
-
-  } while(oldy != tempy && (oldy = tempy));
-
-  *y = tempy + 1;
-
-  regs.h.ah = 0x02;
-  regs.h.dh = origy-2;
-  regs.h.dl = 0;
-  int86(0x10, &regs, &regs);
-}
-
 int main(int argc, char * argv[]) {
-  int origx = 0;
-  int origy = 0;
-  int temp;
-
   FILE * input;
 
-  int width = 80;
-  int height = 24;
-
   int leftOffset = 0;
+
+  int temp = 0;
 
   int virtualWidth = 80;
 
@@ -649,40 +694,8 @@ int main(int argc, char * argv[]) {
   int maxLine = 0;
   int firstTime = TRUE;
 
-
-  setvbuf(stdin, NULL, _IONBF, 0);
-  setvbuf(stdout, NULL, _IONBF, 0);
-
-  /* clear the keyboard buffer */
-  while(kbhit()) {
-    getch();
-  }
-
-  /* test for vt100 capability */
-  printf("\n" CSI "6n\b\b\b\b");
-  fflush(stdout);
-
-  if(parseCursorLocation(&origx, &origy)) {
-    /* The console supports vt100 control codes */
-
-    /* attempt to move the cursor to 255, 255 then get the cursor position
-    again. This will get limited to the terminal's actual size*/
-    printf(CSI "255;255H" CSI "6n");
-    fflush(stdout);
-
-    parseCursorLocation(&width, &height);
-
-    /* reposition the cursor */
-    printf(CSI "%d;%dH", origy-1, origx);
-    fflush(stdout);
-
-    useAnsi = TRUE;
-  }
-  else {
-    /* The console doesn't support vt100 control codes.
-    Use interupt 10h services the control it instead */
-    noAnsi(&width, &height);
-  }
+  int notLastLine = TRUE;
+  int i;
 
   input = fopen("testfile.txt", "rb");
 
@@ -691,62 +704,94 @@ int main(int argc, char * argv[]) {
     return 0;
   }
 
-  if(width < 80) {
-    virtualWidth = width;
-  }
+  getWindowSize(&width, &height);
 
-  do {
-    if(currentLine != previousLine || firstTime) {
-      drawScreen(
+  /* Use dumb terminal mode if height == 0 */
+  if(height == 0) {
+    printf("Press 'q' to quit or SPACE to continue\n");
+
+    do {
+      notLastLine = getLine(
           input,
-          currentLine,
-          previousLine,
-          &maxLine,
-          virtualWidth,
-          leftOffset,
           width,
-          height
+          &line,
+          &lineLength,
+          &lastWord,
+          &lastWordLength
         );
 
-      previousLine = currentLine;
+      for(i = 0; i < width; i++) {
+        if(i < lineLength) {
+          fputc(line[i], stdout);
+        }
+        else {
+          fputc(' ', stdout);
+        }
+      }
 
-      firstTime = FALSE;
+      temp = mygetch();
+    } while (temp != 'q' && temp != 'Q' && notLastLine);
+  }
+  else {
+    if(width < 80) {
+      virtualWidth = width;
     }
 
-    temp = mygetch();
+    do {
+      if(currentLine != previousLine || firstTime) {
+        drawScreen(
+            input,
+            currentLine,
+            previousLine,
+            &maxLine,
+            virtualWidth,
+            leftOffset,
+            width,
+            height
+          );
 
-    switch(temp) {
-      case KEY_UP: {
-        if(currentLine) {
-          currentLine -= 1;
-        }
-      } break;
+        previousLine = currentLine;
 
-      case KEY_DOWN: {
-        if(currentLine + 1 <= maxLine) {
-          currentLine += 1;
-        }
-      } break;
+        firstTime = FALSE;
+      }
 
-      case KEY_LEFT: {
-        if(leftOffset) {
-          leftOffset--;
-          firstTime = TRUE; /* redraw the whole screen */
-        }
-      } break;
+      temp = mygetch();
 
-      case KEY_RIGHT: {
-        if(width < virtualWidth && leftOffset < virtualWidth - width) {
-          leftOffset++;
-          firstTime = TRUE; /* redraw the whole screen */
-        }
-      } break;
-    }
-  } while(temp != 'q');
+      switch(temp) {
+        case KEY_UP: {
+          if(currentLine) {
+            currentLine -= 1;
+          }
+        } break;
+
+        case KEY_DOWN: {
+          if(currentLine + 1 <= maxLine) {
+            currentLine += 1;
+          }
+        } break;
+
+        case KEY_LEFT: {
+          if(leftOffset) {
+            leftOffset--;
+            firstTime = TRUE; /* redraw the whole screen */
+          }
+        } break;
+
+        case KEY_RIGHT: {
+          if(width < virtualWidth && leftOffset < virtualWidth - width) {
+            leftOffset++;
+            firstTime = TRUE; /* redraw the whole screen */
+          }
+        } break;
+      }
+    } while(temp != 'q' && temp != 'Q');
+  }
 
   free(line);
 
   fclose(input);
 
-  return 0;
+  putchar('\n');
+
+  return EXIT_SUCCESS;
 }

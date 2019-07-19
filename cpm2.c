@@ -1,27 +1,40 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
+#include <conio.h>
+#include <cpm.h>
 
 #define __Z88DK_R2L_CALLING_CONVENTION /* Makes varargs kinda work on Z88DK
 as long as the function using them uses the __stdc calling convention */
 #include <stdarg.h>
-
-#include <conio.h>
-#include <cpm.h>
+#include <errno.h>
 
 #pragma output protect8080 /* Abort if the cpu isn't a z80 */
 
 #define MSX_DOSVER 0x6f
 #define ESC "\033"
 #define CSI "\033["
-#define FALSE 0
-#define TRUE !FALSE
+#ifndef TRUE
+  #define FALSE 0
+  #define TRUE !FALSE
+#endif
+
+#define KEY_UP 256
+#define KEY_DOWN 257
+#define KEY_LEFT 258
+#define KEY_RIGHT 259
 
 #define cursor_home 0
 #define insert_line 1
 #define enter_reverse_mode 2
 #define exit_attribute_mode 3
+
+#define MODE_DUMB 0
+#define MODE_ADM3A 1
+#define MODE_VT52 2
+#define MODE_VT100 3
+
+#define freeAndZero(p) { free(p); p = 0; }
 
 static const char* envName = "ENVIRON";
 static const char* envNameNew = "ENVIRON.NEW";
@@ -34,20 +47,23 @@ struct envVar {
 };
 
 long heap;
-
 int mode;
 
-#define MODE_DUMB 0
-#define MODE_ADM3A 1
-#define MODE_VT52 2
-#define MODE_VT100 3
+struct offsets {
+  long value;
+  int number;
+  struct offsets * previous;
+  struct offsets * next;
+};
 
-#define KEY_UP 256
-#define KEY_DOWN 257
-#define KEY_LEFT 258
-#define KEY_RIGHT 259
-
-#define freeAndZero(p) { free(p); p = 0; }
+struct offsets * topLineOffset = NULL;
+struct offsets * lastLineOffset = NULL;
+int width = 0;
+int height = 0;
+char * line = NULL;
+int lineLength = 0;
+char * lastWord = NULL;
+int lastWordLength = 0;
 
 void reallocMsg(void **mem, size_t size) {
   void *temp;
@@ -64,7 +80,7 @@ void reallocMsg(void **mem, size_t size) {
       }
 
       if(temp == NULL) {
-        fprintf(stderr, "malloc failed\n");
+        fputs("malloc failed\n", stderr);
         exit(EXIT_FAILURE);
       }
 
@@ -76,9 +92,84 @@ void reallocMsg(void **mem, size_t size) {
     }
   }
   else {
-    fprintf(stderr, "invalid realloc\n");
+    fputs("invalid realloc\n", stderr);
     exit(EXIT_FAILURE);
   }
+}
+
+/* append a character into a string with a given length, using realloc */
+int strAppend(char c, char **value, int *strSize) {
+  char *temp;
+
+  /* validate inputs */
+  /* increase value length by 1 character */
+
+  /* update the string pointer */
+  /* increment strSize */
+  if(strSize != NULL) {
+    if(value != NULL) {
+      /* continue to use realloc directly here as reallocMsg can
+      call strAppend itself indirectly */
+      if((temp = realloc(*value, (*strSize)+1)) != NULL) {
+        *value = temp;
+
+        /* store the additional character */
+        (*value)[*strSize] = c;
+      }
+      else {
+        return FALSE;
+      }
+    }
+
+    (*strSize)++;
+  }
+
+  return TRUE;
+}
+
+int getch2() {
+  int temp;
+
+  do {
+    temp = bdos(CPM_DCIO, 0xff);
+  } while(temp == 0);
+
+  return temp;
+}
+
+int parseCursorLocation(int *x, int * y) {
+  int temp = 0, i, arr[2];
+
+  if(getch2() == 27) {
+
+    /* skip [*/
+    getch2();
+
+    for(i = 0; i != 2; i++) {
+      arr[i] = 0;
+
+      do {
+        temp = getch2();
+
+        if(temp > 47 && temp < 58) { /* quit if not a digit */
+          arr[i] = arr[i] * 10 + temp - 48;
+        }
+        else {
+          break;
+        }
+      } while (1);
+    }
+
+    /* Consume everything else on the input buffer */
+    while(bdos(CPM_DCIO, 0xff) != 0) {}
+
+    *x = arr[1];
+    *y = arr[0];
+
+    return TRUE;
+  }
+
+  return FALSE;
 }
 
 int d_fgets(char** ws, FILE* stream) {
@@ -401,18 +492,153 @@ long int myftell(FILE * stream) {
   return offset;
 }
 
-int getch2() {
-  int temp;
+void moveCursor(int x, int y) {
+  switch(mode) {
+    case MODE_VT52: {
+      printf(ESC "Y%c%c", (unsigned char)(y+32), (unsigned char)(x+32));
+      fflush(stdout);
+    } break;
+    case MODE_VT100: {
+      printf(CSI "%d;%dH", y+1, x+1);
+      fflush(stdout);
+    } break;
+  }
+}
 
-  do {
-    temp = bdos(CPM_DCIO, 0xff);
-  } while(temp == 0);
+int getWindowSize(int * x, int * y) {
+  const char * cenv = "COLUMNS";
+  const char * lenv = "LINES";
+  int origx = 0;
+  int origy = 0;
+  char * columns;
+  char * lines;
+  char * temp2 = NULL;
 
-  return temp;
+  mode = MODE_ADM3A;
+
+  /* test for preexisting env vars */
+  /* try to get the COLUMNS and LINES environment variables. */
+  columns = getenv(cenv);
+  lines = getenv(lenv);
+
+  if(columns != NULL && lines != NULL) {
+    *x = myatoi(columns);
+    *y = myatoi(lines);
+  }
+
+  /* Test if the computer is an MSX */
+  else if(
+    bdos(CPM_VERS, 0) == 0x22 && /* MSX computers return 2.2 as their CP/M version */
+    bdos(MSX_DOSVER, 0) == 0 && /* only MSX computers return 0 for this call */
+    /* MSX computers store the console size directly */
+    (*x = *((unsigned char *)0xF3B0)) != 0 &&
+    (*y = *((unsigned char *)0xF3B1)) != 0
+  ) {
+    /* all MSX computers simulate a vt52 */
+    mode = MODE_VT52;
+  }
+  else {
+    /* Consume any waiting keypresses there may be */
+    while(kbhit()) {
+      getch2();
+    }
+
+    /* Test if the computer is hooked up to an ANSI terminal */
+    printf("\n" CSI "6n\b\b\b");
+    fflush(stdout);
+
+    if(parseCursorLocation(&origx, &origy)) {
+      /* The console supports vt100 control codes */
+
+      /* attempt to move the cursor to 255, 255 then get the cursor position
+      again. This will get limited to the terminal's actual size */
+      printf(CSI "255;255H" CSI "6n");
+      fflush(stdout);
+
+      parseCursorLocation(x, y);
+
+      /* reposition the cursor */
+      printf(CSI "%d;%dH", origy-1, origx);
+      fflush(stdout);
+
+      mode = MODE_VT100;
+    }
+    else {
+      /* Test to see if the terminal is a VT52 */
+      while(kbhit()) {
+        getch2();
+      }
+
+      printf(ESC "Z\b");
+      fflush(stdout);
+
+      if(
+          getch2() == '\033' &&
+          getch2() == '/'
+      ) {
+        switch(getch2()) {
+          case 'A':
+          case 'H':
+          case 'J':
+            /* VT50 can't position the cursor */
+            mode = MODE_DUMB;
+          break;
+
+          default: {
+            *x = 80;
+            *y = 24;
+            mode = MODE_VT52;
+          }
+        }
+      }
+
+      while(kbhit()) {
+        getch2();
+      }
+
+      columns = NULL;
+      lines = NULL;
+
+      /* If they don't exist, ask the user for them directly,
+      then try to store them for next time with setenv */
+      printf("SCREEN COLUMNS (80)?\n");
+      d_fgets(&columns, stdin);
+
+      printf("SCREEN ROWS (0)?\n");
+      d_fgets(&lines, stdin);
+
+      *x = myatoi(columns);
+      *y = myatoi(lines);
+
+      if(*x < 1) {
+        *x = 80; /* default value */
+      }
+
+      d_sprintf(&columns, "%d", x);
+      d_sprintf(&lines, "%d", y);
+
+      printf("Updating ENVIRON file\n");
+
+      /*
+        Try to store the values we got back into the environment.
+        We don't care if this works or not though as it's just a
+        convenience for the user.
+      */
+      setenv(cenv, columns, TRUE);
+      setenv(lenv, lines, TRUE);
+
+      /* Remember to clean up the memory we allocated */
+      freeAndZero(columns);
+      freeAndZero(lines);
+    }
+  }
+
+  return TRUE;
 }
 
 int mygetch() {
   int temp;
+  int retval = 0;
   int first;
   int inEscape = FALSE;
 
@@ -426,35 +652,41 @@ int mygetch() {
     switch(temp) {
       case 30: {
         if(mode == MODE_ADM3A) {
-          return KEY_DOWN;
+          retval = KEY_DOWN;
+          break;
         }
       } /* fall thru */
 
       case 11:
-      case 'A':
-        return KEY_UP;
+      case 'A': {
+        retval = KEY_UP;
+      } break;
 
       case 31: {
         if(mode == MODE_ADM3A) {
-          return KEY_UP;
+          retval = KEY_UP;
+          break;
         }
       } /* fall thru */
 
       case 10:
-      case 'B':
-        return KEY_DOWN;
+      case 'B': {
+        retval = KEY_DOWN;
+      } break;
 
       case 6:
       case 12:
       case 28:
-      case 'C':
-        return KEY_RIGHT;
+      case 'C': {
+        retval = KEY_RIGHT;
+      } break;
 
       case 1:
       case 8:
       case 29:
-      case 'D':
-        return KEY_LEFT;
+      case 'D': {
+        retval = KEY_LEFT;
+      } break;
 
       case 27: {
         inEscape = TRUE;
@@ -486,30 +718,24 @@ int mygetch() {
 
       default:
         if(!inEscape) {
-          return temp;
+          retval = temp;
         }
 
         inEscape = FALSE;
       break;
     }
-  } while(1);
-}
+  } while(retval == 0);
 
-void moveCursor(int x, int y) {
-  switch(mode) {
-    case MODE_VT52: {
-      printf(ESC "Y%c%c", (unsigned char)(y+32), (unsigned char)(x+32));
-      fflush(stdout);
-    } break;
-
-    case MODE_VT100: {
-      printf(CSI "%d;%dH", y+1, x+1);
-      fflush(stdout);
-    } break;
+  while(kbhit()) {
+    getch();
   }
+
+  return retval;
 }
 
 void putp(int code) {
+  int i, j;
+
   switch(code) {
     case insert_line: {
       switch(mode) {
@@ -526,7 +752,16 @@ void putp(int code) {
     } break;
 
     case cursor_home: {
-      moveCursor(0, 0);
+      if(mode == MODE_ADM3A) {
+        for(i = 0, j = width*height; i < j; i++) {
+          putchar('\b');
+        }
+
+        putchar('\r');
+      }
+      else {
+        moveCursor(0, 0);
+      }
     } break;
 
     case enter_reverse_mode: {
@@ -535,50 +770,6 @@ void putp(int code) {
     case exit_attribute_mode: {
     } break;
   }
-}
-
-struct offsets {
-  long value;
-  int number;
-  struct offsets * previous;
-  struct offsets * next;
-};
-
-struct offsets * topLineOffset = NULL;
-struct offsets * lastLineOffset = NULL;
-char * line = NULL;
-int lineLength = 0;
-char * lastWord = NULL;
-int lastWordLength = 0;
-
-/* append a character into a string with a given length, using realloc */
-int strAppend(char c, char **value, int *strSize) {
-  char *temp;
-
-  /* validate inputs */
-  /* increase value length by 1 character */
-
-  /* update the string pointer */
-  /* increment strSize */
-  if(strSize != NULL) {
-    if(value != NULL) {
-      /* continue to use realloc directly here as reallocMsg can
-      call strAppend itself indirectly */
-      if((temp = realloc(*value, (*strSize)+1)) != NULL) {
-        *value = temp;
-
-        /* store the additional character */
-        (*value)[*strSize] = c;
-      }
-      else {
-        return FALSE;
-      }
-    }
-
-    (*strSize)++;
-  }
-
-  return TRUE;
 }
 
 void maintainLineOffsets(
@@ -590,7 +781,7 @@ void maintainLineOffsets(
 ) {
   struct offsets * temp = NULL;
 
-  int current = myftell(input);
+  long current = myftell(input);
 
   if(lastWordLength) {
     if(lastWordLength <= width && lastWord[lastWordLength-1] == '\n') {
@@ -764,7 +955,7 @@ int getLine(
 
       default: {
         if(gotch < 32) {
-            gotch = '?';
+          gotch = '?';
         }
 
         /* Displaying utf-8 properly is hard (would probably involve converting
@@ -784,7 +975,6 @@ int getLine(
   } while(1);
 }
 
-
 int drawScreen(
     FILE* input,
     int startLine,
@@ -803,7 +993,6 @@ int drawScreen(
 
   if(startLine == previousLine + 1) {
     putchar('\r');
-    fflush(stdout);
 
     /* scrolling thru the file normally, just display one line */
     currentLine = height - 2;
@@ -818,30 +1007,25 @@ int drawScreen(
       topLineOffset = topLineOffset->previous;
       myfseek(input, topLineOffset->value, SEEK_SET);
 
-      if(mode == MODE_ADM3A) {
-        for(i = 0, j = width*height; i < j; i++) {
-          putchar('\b');
-        }
-
-        printf("\r");
-      }
-      else {
+      if(mode != MODE_ADM3A) {
         /* if the terminal has the insert line capability then use it */
 
         /* clear the last but 1 line. This will become the bottom
         line after we insert a new line. We'll print the 'move with arrow
         keys' message over the top of this */
-        moveCursor(0, height-2);
+        moveCursor(0, height - 2);
+
         for(i = 0; i < width; i++) {
           putchar(' ');
         }
 
         putp(cursor_home);
         putp(insert_line);
-        putp(cursor_home);
 
         doTparm = TRUE;
       }
+
+      putp(cursor_home);
 
       freeAndZero(lastWord);
       lastWordLength = 0;
@@ -849,17 +1033,7 @@ int drawScreen(
     else {
       /* The screen was resized. just redraw it in the new size */
       myfseek(input, topLineOffset->value, SEEK_SET);
-
-      if(mode == MODE_ADM3A) {
-        for(i = 0, j = width*height; i < j; i++) {
-          putchar('\b');
-        }
-
-        printf("\r");
-      }
-      else {
-        putp(cursor_home);
-      }
+      putp(cursor_home);
 
       freeAndZero(lastWord);
       lastWordLength = 0;
@@ -969,45 +1143,8 @@ int drawScreen(
   return 0;
 }
 
-int parseCursorLocation(int *x, int * y) {
-  int temp = 0, i, arr[2];
-
-  if(getch2() == 27) {
-    /* skip [*/
-    getch2();
-
-    for(i = 0; i != 2; i++) {
-      arr[i] = 0;
-
-      do {
-        temp = getch2();
-
-        if(temp > 47 && temp < 58) { /* quit if not a digit */
-          arr[i] = arr[i] * 10 + temp - 48;
-        }
-        else {
-          break;
-        }
-      } while (1);
-    }
-
-    /* Consume everything else on the input buffer */
-    while(bdos(CPM_DCIO, 0xff) != 0) {}
-
-    *x = arr[1];
-    *y = arr[0];
-
-    return TRUE;
-  }
-
-  return FALSE;
-}
-
 int main(int argc, char * argv[]) {
   FILE * input;
-
-  int width = 0;
-  int height = 0;
 
   int leftOffset = 0;
 
@@ -1020,158 +1157,24 @@ int main(int argc, char * argv[]) {
   int maxLine = 0;
   int firstTime = TRUE;
 
-  int origx = 0;
-  int origy = 0;
-  int x = 0;
-  int y = 0;
-  char * columns;
-  char * lines;
-  const char * cenv = "COLUMNS";
-  const char * lenv = "LINES";
-  char * temp2 = NULL;
   int notLastLine = TRUE;
   int i;
 
-  mallinit();
-  sbrk(40000, 5000);
-
-  mode = MODE_ADM3A;
-
-  /* test for preexisting env vars */
-  /* try to get the COLUMNS and LINES environment variables. */
-  columns = getenv(cenv);
-  lines = getenv(lenv);
-
-  if(columns != NULL && lines != NULL) {
-    x = myatoi(columns);
-    y = myatoi(lines);
-  }
-
-  /* Test if the computer is an MSX */
-  else if(
-    bdos(CPM_VERS, 0) == 0x22 && /* MSX computers return 2.2 as their CP/M version */
-    bdos(MSX_DOSVER, 0) == 0 && /* only MSX computers return 0 for this call */
-    /* MSX computers store the console size directly */
-    (x = *((unsigned char *)0xF3B0)) != 0 &&
-    (y = *((unsigned char *)0xF3B1)) != 0
-  ) {
-    /* all MSX computers simulate a vt52 */
-    mode = MODE_VT52;
-  }
-  else {
-    /* Consume any waiting keypresses there may be */
-    while(kbhit()) {
-      getch2();
-    }
-
-    /* Test if the computer is hooked up to an ANSI terminal */
-    printf("\n" CSI "6n\b\b\b");
-    fflush(stdout);
-
-    if(parseCursorLocation(&origx, &origy)) {
-      /* The console supports vt100 control codes */
-
-      /* attempt to move the cursor to 255, 255 then get the cursor position
-      again. This will get limited to the terminal's actual size */
-      printf(CSI "255;255H" CSI "6n");
-      fflush(stdout);
-
-      parseCursorLocation(&x, &y);
-
-      /* reposition the cursor */
-      printf(CSI "%d;%dH", origy-1, origx);
-      fflush(stdout);
-
-      mode = MODE_VT100;
-    }
-    else {
-      /* Test to see if the terminal is a VT52 */
-      while(kbhit()) {
-        getch2();
-      }
-
-      printf(ESC "Z\b");
-      fflush(stdout);
-
-      if(
-          getch2() == '\033' &&
-          getch2() == '/'
-      ) {
-        switch(getch2()) {
-          case 'A':
-          case 'H':
-          case 'J':
-            /* VT50 can't position the cursor */
-            mode = MODE_DUMB;
-          break;
-
-          default: {
-            width = 80;
-            height = 24;
-            mode = MODE_VT52;
-          }
-        }
-      }
-
-      while(kbhit()) {
-        getch2();
-      }
-
-      columns = NULL;
-      lines = NULL;
-
-      /* If they don't exist, ask the user for them directly,
-      then try to store them for next time with setenv */
-      printf("SCREEN COLUMNS (80)?\n");
-      d_fgets(&columns, stdin);
-
-      printf("SCREEN ROWS (0)?\n");
-      d_fgets(&lines, stdin);
-
-      x = myatoi(columns);
-      y = myatoi(lines);
-
-      if(x < 1) {
-        x = 80; /* default value */
-      }
-
-      d_sprintf(&columns, "%d", x);
-      d_sprintf(&lines, "%d", y);
-
-      printf("Updating ENVIRON file\n");
-
-      /*
-        Try to store the values we got back into the environment.
-        We don't care if this works or not though as it's just a
-        convenience for the user.
-      */
-      setenv(cenv, columns, TRUE);
-      setenv(lenv, lines, TRUE);
-
-      /* Remember to clean up the memory we allocated */
-      freeAndZero(columns);
-      freeAndZero(lines);
-    }
-  }
-
-  /* Use dumb terminal mode if y == 0 */
-  if(y == 0) {
-    mode = MODE_DUMB;
-  }
-
-  width = x;
-  height = y;
-
-  input = fopen("TESTFILE.TXT", "rb");
+  input = fopen("testfile.txt", "rb");
 
   if(input == NULL) {
     fputs("file couldn't be opened\n", stdout);
     return 0;
   }
 
-  //setvbuf(input, NULL, _IOFBF , 512);
+  /* z88dk's malloc requires initial*/
+  mallinit();
+  sbrk(40000, 5000);
 
-  if(mode == MODE_DUMB) {
+  getWindowSize(&width, &height);
+
+  /* Use dumb terminal mode if height == 0 */
+  if(height == 0) {
     printf("Press 'q' to quit or SPACE to continue\n");
 
     do {
@@ -1255,7 +1258,7 @@ int main(int argc, char * argv[]) {
 
   fclose(input);
 
-  putchar('\r');
+  putchar('\n');
 
   return EXIT_SUCCESS;
 }

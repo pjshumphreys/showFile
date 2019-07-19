@@ -1,17 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <kernel.h>
 
+#define ESC "\033"
 #ifndef TRUE
   #define FALSE 0
   #define TRUE !FALSE
 #endif
 
-#define KEY_UP 139
-#define KEY_DOWN 138
-#define KEY_LEFT 136
-#define KEY_RIGHT 137
+#define KEY_UP 328
+#define KEY_DOWN 336
+#define KEY_LEFT 331
+#define KEY_RIGHT 333
 
 #define cursor_home 0
 #define insert_line 1
@@ -19,6 +19,22 @@
 #define exit_attribute_mode 3
 
 #define freeAndZero(p) { free(p); p = 0; }
+
+#if defined(__VBCC__) || defined(__TURBOC__) || defined(LATTICE)
+  #ifdef __VBCC__
+    #include <gem.h>
+  #else
+    #include <vdi.h>
+    #include <aes.h>
+  #endif
+
+  #include <tos.h>
+#else
+  #include <obdefs.h>
+  #include <define.h>
+  #include <gemdefs.h>
+  #include <osbind.h>
+#endif
 
 struct offsets {
   long value;
@@ -99,65 +115,57 @@ int strAppend(char c, char **value, int *strSize) {
 }
 
 void moveCursor(int x, int y) {
-  _kernel_oswrch(31);
-  _kernel_oswrch(x);
-  _kernel_oswrch(y);
+  printf(ESC "Y%c%c", (unsigned char)(' '+y), (unsigned char)(' '+x));
 }
 
 int getWindowSize(int * x, int * y) {
-  const int columns[] = {
-    80, 40, 20, 80,
-    40, 20, 40, 40,
-    80
-  };
+  short a, b, c, d, e, f;
 
-  const int rows[] = {
-    32, 32, 32, 25,
-    32, 32, 25, 25,
-    0 /* 0 means just output all lines then quit */
-  };
+  /* get console width and height */
+  vq_chcells(graf_handle(&a, &b, &c, &d), &e, &f);
 
-  /* get the current screen mode and use it to figure out
-  the current terminal columns and rows */
-  unsigned int currentMode =
-    (_kernel_osbyte(135, 0, 0) & 0xff00) >> 8;
-
-  if(currentMode > 7) {
-    currentMode = 8;
-  }
-
-  *x = columns[currentMode];
-  *y = rows[currentMode];
+  *x = f;
+  *y = e;
 
   return TRUE;
 }
 
-int mygetch() {
-  unsigned int temp;
+short mygetch() {
+  long x;
+  unsigned char ascii;
 
-  do {
-    temp = _kernel_osbyte(129, 0x01, 0x04);
+  /* get keyboard key (no echo ascii mixed with scancodes) */
+  x = Cnecin();
 
-    if((temp & 0xff00) == 0) {
-      return (temp & 0xff);
-    }
-  } while(1);
+  /* bit 0-8 are the atascii code */
+  ascii = x & 0xff;
+
+  /* function and arrow key return ascii 0 */
+  if(ascii) {
+    return ascii;
+  }
+
+  /* bits 16-23 are the keyboard scan code. extract them and
+  add 256 to the result so we can disambiguate from ascii */
+  return ((x & 0xff0000) >> 16) + 256;
 }
 
 void putp(int code) {
   switch(code) {
     case insert_line: {
-      _kernel_oswrch(11);
+      printf(ESC "L");
     } break;
 
     case cursor_home: {
-      _kernel_oswrch(30);
+      printf(ESC "H");
     } break;
 
     case enter_reverse_mode: {
+      printf(ESC "p");
     } break;
 
     case exit_attribute_mode: {
+      printf(ESC "q");
     } break;
   }
 }
@@ -538,7 +546,7 @@ int main(int argc, char * argv[]) {
 
   int leftOffset = 0;
 
-  int temp = 0;
+  short temp;
 
   int virtualWidth = 80;
 
@@ -550,15 +558,16 @@ int main(int argc, char * argv[]) {
   int notLastLine = TRUE;
   int i;
 
-  input = fopen("testfile", "rb");
+  input = fopen("testfile.txt", "rb");
 
   if(input == NULL) {
     fputs("file couldn't be opened\n", stdout);
     return 0;
   }
 
-  /* make arrow keys send ascii codes */
-  _kernel_osbyte(4, 1, 0);
+  /* enable line wrapping */
+  fputs(ESC "v", stdout);
+  fflush(stdout);
 
   getWindowSize(&width, &height);
 
@@ -642,9 +651,6 @@ int main(int argc, char * argv[]) {
       }
     } while(temp != 'q' && temp != 'Q');
   }
-
-  /* make arrow keys control the cursor again */
-  _kernel_osbyte(4, 0, 0);
 
   free(line);
 

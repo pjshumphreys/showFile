@@ -26,6 +26,7 @@
 #endif
 
 
+#define freeAndZero(p) { free(p); p = 0; }
 
 struct termios oldTerm;
 volatile int termResized;
@@ -39,6 +40,84 @@ struct entry {
 };
 
 struct entry sequences[8];
+
+struct offsets {
+  long value;
+  int number;
+  struct offsets * previous;
+  struct offsets * next;
+};
+
+struct offsets * topLineOffset = NULL;
+struct offsets * lastLineOffset = NULL;
+int width = 0;
+int height = 0;
+char * line = NULL;
+int lineLength = 0;
+char * lastWord = NULL;
+int lastWordLength = 0;
+
+void reallocMsg(void **mem, size_t size) {
+  void *temp;
+
+  temp = *mem;
+
+  if(mem != NULL) {
+    if(size) {
+      if(temp == NULL) {
+        temp = malloc(size);
+      }
+      else {
+        temp = realloc(temp, size);
+      }
+
+      if(temp == NULL) {
+        fputs("malloc failed\n", stderr);
+        exit(EXIT_FAILURE);
+      }
+
+      *mem = temp;
+    }
+    else {
+      free(*mem);
+      *mem = NULL;
+    }
+  }
+  else {
+    fputs("invalid realloc\n", stderr);
+    exit(EXIT_FAILURE);
+  }
+}
+
+/* append a character into a string with a given length, using realloc */
+int strAppend(char c, char **value, int *strSize) {
+  char *temp;
+
+  /* validate inputs */
+  /* increase value length by 1 character */
+
+  /* update the string pointer */
+  /* increment strSize */
+  if(strSize != NULL) {
+    if(value != NULL) {
+      /* continue to use realloc directly here as reallocMsg can
+      call strAppend itself indirectly */
+      if((temp = realloc(*value, (*strSize)+1)) != NULL) {
+        *value = temp;
+
+        /* store the additional character */
+        (*value)[*strSize] = c;
+      }
+      else {
+        return FALSE;
+      }
+    }
+
+    (*strSize)++;
+  }
+
+  return TRUE;
+}
 
 int setupTermios() {
   struct termios newTerm;
@@ -93,6 +172,35 @@ int setupSignals(void) {
   return TRUE;
 }
 
+#define SETKEY(n, code, string) sequences[n].value = code; \
+    sequences[n].text = string; \
+    sequences[n].length = strlen(string)
+
+int cmpfunc(const void * a, const void * b) {
+  int temp = ((struct entry *)a)->length -
+      ((struct entry *)b)->length;
+
+  if(((struct entry *)a)->length > maxLength) {
+    maxLength = ((struct entry *)a)->length;
+  }
+
+  if(((struct entry *)b)->length > maxLength) {
+    maxLength = ((struct entry *)b)->length;
+  }
+
+  return temp;
+}
+
+int kbhit(void) {
+  int byteswaiting;
+  ioctl(0, FIONREAD, &byteswaiting);
+  return byteswaiting > 0;
+}
+
+void moveCursor(int x, int y) {
+  tputs(tparm(cursor_address, y, x), 1, putchar);
+}
+
 int getWindowSize(int * x, int * y) {
   struct winsize ws;
 
@@ -106,18 +214,6 @@ int getWindowSize(int * x, int * y) {
   return TRUE;
 }
 
-#define SETKEY(n, code, string) sequences[n].value = code; \
-    sequences[n].text = string; \
-    sequences[n].length = strlen(string)
-
-int kbhit(void) {
-  int byteswaiting;
-  ioctl(0, FIONREAD, &byteswaiting);
-  return byteswaiting > 0;
-}
-
-/* only returns resize pseudo key, arrow keys, home, end, page-up,
-page-down or escape */
 int mygetch() {
   int temp;
   int i = 0;
@@ -188,93 +284,6 @@ int mygetch() {
     } while(1);
   } while(1);
 }
-
-int cmpfunc(const void * a, const void * b) {
-  int temp = ((struct entry *)a)->length -
-      ((struct entry *)b)->length;
-
-  if(((struct entry *)a)->length > maxLength) {
-    maxLength = ((struct entry *)a)->length;
-  }
-
-  if(((struct entry *)b)->length > maxLength) {
-    maxLength = ((struct entry *)b)->length;
-  }
-
-  return temp;
-}
-
-#define freeAndZero(p) { free(p); p = 0; }
-
-struct offsets {
-  long value;
-  int number;
-  struct offsets * previous;
-  struct offsets * next;
-};
-
-void reallocMsg(void **mem, size_t size) {
-  void *temp;
-
-  if(mem != NULL) {
-    if(size) {
-      temp = realloc(*mem, size);
-
-      if(temp == NULL) {
-        fputs("malloc failed", stderr);
-        exit(-1);
-      }
-
-      *mem = temp;
-    }
-    else {
-      free(*mem);
-      *mem = NULL;
-    }
-  }
-  else {
-    fputs("invalid realloc", stderr);
-    exit(-1);
-  }
-}
-
-/* append a character into a string with a given length, using realloc */
-int strAppend(char c, char **value, int *strSize) {
-  char *temp;
-
-  /* validate inputs */
-  /* increase value length by 1 character */
-
-  /* update the string pointer */
-  /* increment strSize */
-  if(strSize != NULL) {
-    if(value != NULL) {
-      /* continue to use realloc directly here as reallocMsg can
-      call strAppend itself indirectly */
-      if((temp = realloc(*value, (*strSize)+1)) != NULL) {
-        *value = temp;
-
-        /* store the additional character */
-        (*value)[*strSize] = c;
-      }
-      else {
-        return FALSE;
-      }
-    }
-
-    (*strSize)++;
-  }
-
-  return TRUE;
-}
-
-struct offsets * topLineOffset = NULL;
-
-struct offsets * lastLineOffset = NULL;
-char * line = NULL;
-int lineLength = 0;
-char * lastWord = NULL;
-int lastWordLength = 0;
 
 void maintainLineOffsets(
     struct offsets ** lastLineOffset,
@@ -402,6 +411,7 @@ int getLine(
       case '\n':
 
       case EOF:
+      case '\0':
       case '\x1a': /* CP/M end of file character */
 
       case ' ': {
@@ -478,15 +488,6 @@ int getLine(
   } while(1);
 }
 
-
-
-const char * navMessage =
-"Navigate with arrow keys ('q' to quit)";
-const char * navDelete  =
-"\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"
-"\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b";
-
-
 int drawScreen(
     FILE* input,
     int startLine,
@@ -504,8 +505,7 @@ int drawScreen(
   int doTparm = FALSE;
 
   if(startLine == previousLine + 1) {
-    printf(navDelete);
-    fflush(stdout);
+    putchar('\r');
 
     /* scrolling thru the file normally, just display one line */
     currentLine = height - 2;
@@ -519,15 +519,26 @@ int drawScreen(
       /* scroll up */
       topLineOffset = topLineOffset->previous;
       fseek(input, topLineOffset->value, SEEK_SET);
-      putp(cursor_home);
 
-      /* if the terminal has the insert line capability then use it */
-      if(TRUE) {
-        putp(insert_line);
+      {
+        /* if the terminal has the insert line capability then use it */
+
+        /* clear the last but 1 line. This will become the bottom
+        line after we insert a new line. We'll print the 'move with arrow
+        keys' message over the top of this */
+        moveCursor(0, height - 2);
+
+        for(i = 0; i < width; i++) {
+          putchar(' ');
+        }
+
         putp(cursor_home);
+        putp(insert_line);
 
         doTparm = TRUE;
       }
+
+      putp(cursor_home);
 
       freeAndZero(lastWord);
       lastWordLength = 0;
@@ -629,16 +640,14 @@ int drawScreen(
   /* Did we just only repaint the top line(s) of the screen?
   If so, just skip back to the bottom line */
   if(doTparm) {
-    tputs(tparm(cursor_address, height-1, 0), 1, putchar);
+    moveCursor(0, height-1);
   }
 
   /* redisplay the navigation message (in bold) */
-  fputc(' ', stdout);
-  putp(enter_reverse_mode);
-  printf(navMessage);
-  putp(exit_attribute_mode);
+  /* putp(enter_reverse_mode); */
+  printf("Move with arrow keys.q exits");
+  /* putp(exit_attribute_mode); */
   fflush(stdout);
-  putp(clr_eos);
 
   if(notLastLine && startLine == *maxLine) {
     (*maxLine)++;
@@ -650,15 +659,9 @@ int drawScreen(
 int main(int argc, char * argv[]) {
   FILE * input;
 
-  int width = 80;
-  int height = 24;
-
   int leftOffset = 0;
 
-  int errret = 0;
   int temp = 0;
-  int x;
-  int y;
 
   int virtualWidth = 80;
 
@@ -667,127 +670,164 @@ int main(int argc, char * argv[]) {
   int maxLine = 0;
   int firstTime = TRUE;
 
-  setlocale(LC_ALL, "en_GB.UTF8");
+  int notLastLine = TRUE;
+  int i, y;
 
+  int errret = 0;
+
+  setlocale(LC_ALL, "en_GB.UTF8");
   setvbuf(stdin, NULL, _IONBF, 0);
-  setvbuf(stdout, NULL, _IONBF, 0);
 
   if(
-    isatty(STDOUT_FILENO) &&
-    setupterm(0, STDOUT_FILENO, &errret) == OK &&
-    setupTermios()
+    !isatty(STDOUT_FILENO) ||
+    setupterm(0, STDOUT_FILENO, &errret) != OK ||
+    !setupTermios()
   ) {
-    atexit(exitTermios);
+    return EXIT_SUCCESS;
+  }
 
-    if(setupSignals()) {
-      /* populate the lookup table with the codes we want */
-      SETKEY(0, KEY_HOME, key_home);
-      SETKEY(1, KEY_END, key_end);
-      SETKEY(2, KEY_NPAGE, key_npage);
-      SETKEY(3, KEY_PPAGE, key_ppage);
-      SETKEY(4, KEY_UP, key_up);
-      SETKEY(5, KEY_DOWN, key_down);
-      SETKEY(6, KEY_LEFT, key_left);
-      SETKEY(7, KEY_RIGHT, key_right);
+  atexit(exitTermios);
 
-      /* sort the table by length */
-      qsort(&sequences, 8, sizeof(struct entry), cmpfunc);
+  if(!setupSignals()) {
+    return EXIT_SUCCESS;
+  }
 
-      sequence = malloc(maxLength+1);
+  /* populate the lookup table with the codes we want */
+  SETKEY(0, KEY_HOME, key_home);
+  SETKEY(1, KEY_END, key_end);
+  SETKEY(2, KEY_NPAGE, key_npage);
+  SETKEY(3, KEY_PPAGE, key_ppage);
+  SETKEY(4, KEY_UP, key_up);
+  SETKEY(5, KEY_DOWN, key_down);
+  SETKEY(6, KEY_LEFT, key_left);
+  SETKEY(7, KEY_RIGHT, key_right);
 
-      input = fopen("testfile.txt", "rb");
+  /* sort the table by length */
+  qsort(&sequences, 8, sizeof(struct entry), cmpfunc);
 
-      if(input == NULL) {
-        fputs("file couldn't be opened\n", stdout);
-        return 0;
+  sequence = malloc(maxLength+1);
+
+  input = fopen("testfile.txt", "rb");
+
+  if(input == NULL) {
+    fputs("file couldn't be opened\n", stdout);
+    return 0;
+  }
+
+  getWindowSize(&width, &height);
+
+  /* Use dumb terminal mode if height == 0 */
+  if(height == 0) {
+    printf("Press 'q' to quit or SPACE to continue\n");
+
+    do {
+      notLastLine = getLine(
+          input,
+          width,
+          &line,
+          &lineLength,
+          &lastWord,
+          &lastWordLength
+        );
+
+      for(i = 0; i < width; i++) {
+        if(i < lineLength) {
+          fputc(line[i], stdout);
+        }
+        else {
+          fputc(' ', stdout);
+        }
       }
 
-      getWindowSize(&width, &height);
+      temp = mygetch();
+    } while (temp != 'q' && temp != 'Q' && notLastLine);
+  }
+  else {
+    if(width < 80) {
+      virtualWidth = width;
+    }
 
-      if(width < 80) {
-        virtualWidth = width;
+    do {
+      if(currentLine != previousLine || firstTime) {
+        drawScreen(
+            input,
+            currentLine,
+            previousLine,
+            &maxLine,
+            virtualWidth,
+            leftOffset,
+            width,
+            height
+          );
+
+        previousLine = currentLine;
+
+        firstTime = FALSE;
       }
 
-      do {
-        if(currentLine != previousLine || firstTime) {
-          drawScreen(
-              input,
-              currentLine,
-              previousLine,
-              &maxLine,
-              virtualWidth,
-              leftOffset,
-              width,
-              height
-            );
+      temp = mygetch();
+
+      switch(temp) {
+        case KEY_RESIZE: {
+          leftOffset = 0;
+          firstTime = TRUE; /* redraw the whole screen */
+          getWindowSize(&width, &height);
+
+          /* recalculate the max line */
+          for(y = height - 1; y > 1; y--) {
+            if(lastLineOffset->previous) {
+              lastLineOffset = lastLineOffset->previous;
+            }
+          }
+
+          maxLine = lastLineOffset->number;
+
+          while(currentLine > maxLine) {
+            topLineOffset = topLineOffset->previous;
+            currentLine--;
+          }
 
           previousLine = currentLine;
 
-          firstTime = FALSE;
-        }
+          while(lastLineOffset->next) {
+            lastLineOffset = lastLineOffset->next;
+          }
+        } break;
 
-        temp = mygetch();
+        case KEY_UP: {
+          if(currentLine) {
+            currentLine -= 1;
+          }
+        } break;
 
-        switch(temp) {
-          case KEY_RESIZE: {
-            leftOffset = 0;
+        case KEY_DOWN: {
+          if(currentLine + 1 <= maxLine) {
+            currentLine += 1;
+          }
+        } break;
+
+        case KEY_LEFT: {
+          if(leftOffset) {
+            leftOffset--;
             firstTime = TRUE; /* redraw the whole screen */
-            getWindowSize(&width, &height);
+          }
+        } break;
 
-            /* recalculate the max line */
-            for(y = height - 1; y > 1; y--) {
-              if(lastLineOffset->previous) {
-                lastLineOffset = lastLineOffset->previous;
-              }
-            }
-
-            maxLine = lastLineOffset->number;
-
-            while(currentLine > maxLine) {
-              topLineOffset = topLineOffset->previous;
-              currentLine--;
-            }
-
-            previousLine = currentLine;
-
-            while(lastLineOffset->next) {
-              lastLineOffset = lastLineOffset->next;
-            }
-          } break;
-
-          case KEY_UP: {
-            if(currentLine) {
-              currentLine -= 1;
-            }
-          } break;
-
-          case KEY_DOWN: {
-            if(currentLine + 1 <= maxLine) {
-              currentLine += 1;
-            }
-          } break;
-
-          case KEY_LEFT: {
-            if(leftOffset) {
-              leftOffset--;
-              firstTime = TRUE; /* redraw the whole screen */
-            }
-          } break;
-
-          case KEY_RIGHT: {
-            if(width < virtualWidth && leftOffset < virtualWidth - width) {
-              leftOffset++;
-              firstTime = TRUE; /* redraw the whole screen */
-            }
-          } break;
-        }
-      } while(temp != 'q');
-
-      free(line);
-
-      fclose(input);
-    }
+        case KEY_RIGHT: {
+          if(width < virtualWidth && leftOffset < virtualWidth - width) {
+            leftOffset++;
+            firstTime = TRUE; /* redraw the whole screen */
+          }
+        } break;
+      }
+    } while(temp != 'q' && temp != 'Q');
   }
 
-  return 0;
+  free(line);
+
+  fclose(input);
+
+  putchar('\n');
+
+  return EXIT_SUCCESS;
 }
