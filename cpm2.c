@@ -48,6 +48,7 @@ struct envVar {
 
 long heap;
 int mode;
+int swapArrows = FALSE;
 
 struct offsets {
   long value;
@@ -508,10 +509,12 @@ void moveCursor(int x, int y) {
 int getWindowSize() {
   const char * cenv = "COLUMNS";
   const char * lenv = "LINES";
+  const char * tenv = "TERM";
   int origx = 0;
   int origy = 0;
   char * columns;
   char * lines;
+  char * term;
   char * temp2 = NULL;
 
   mode = MODE_ADM3A;
@@ -524,6 +527,13 @@ int getWindowSize() {
   if(columns != NULL && lines != NULL) {
     width = myatoi(columns);
     height = myatoi(lines);
+
+    term = getenv(tenv);
+
+    if(term && strcmp(term, "VT52") == 0) {
+      mode = MODE_VT52;
+      swapArrows = TRUE;
+    }
   }
 
   /* Test if the computer is an MSX */
@@ -598,6 +608,7 @@ int getWindowSize() {
 
       columns = NULL;
       lines = NULL;
+      term = NULL;
 
       /* If they don't exist, ask the user for them directly,
       then try to store them for next time with setenv */
@@ -614,6 +625,28 @@ int getWindowSize() {
         width = 80; /* default value */
       }
 
+      if(height != 0) {
+        printf("USE VT52 CODES (Y/N)?\n");
+        d_fgets(&term, stdin);
+
+        if(mode != MODE_VT52) {
+          swapArrows = TRUE;
+        }
+
+        if(term[0] == 'Y' || term[0] == 'y') {
+          mode = MODE_VT52;
+          free(term);
+          term = "VT52";
+        }
+        else {
+          freeAndZero(term);
+        }
+
+      }
+      else {
+        mode = MODE_DUMB;
+      }
+
       d_sprintf(&columns, "%d", width);
       d_sprintf(&lines, "%d", height);
 
@@ -626,6 +659,10 @@ int getWindowSize() {
       */
       setenv(cenv, columns, TRUE);
       setenv(lenv, lines, TRUE);
+
+      if(term) {
+        setenv(tenv, term, TRUE);
+      }
 
       /* Remember to clean up the memory we allocated */
       freeAndZero(columns);
@@ -651,7 +688,7 @@ int mygetch() {
 
     switch(temp) {
       case 30: {
-        if(mode == MODE_ADM3A) {
+        if(swapArrows) {
           retval = KEY_DOWN;
           break;
         }
@@ -663,7 +700,7 @@ int mygetch() {
       } break;
 
       case 31: {
-        if(mode == MODE_ADM3A) {
+        if(swapArrows) {
           retval = KEY_UP;
           break;
         }
@@ -805,7 +842,7 @@ void maintainLineOffsets(
   }
 }
 
-int getLine(
+int getLine2(
     FILE * input,
     int virtualWidth
 ) {
@@ -967,6 +1004,48 @@ int getLine(
   } while(1);
 }
 
+
+int getLine(
+    FILE * input,
+    int virtualWidth,
+    int doTparm,
+    int startLine,
+    int *currentLine,
+    struct offsets ** tempLineOffset
+) {
+  int retval;
+
+  maintainLineOffsets(
+    input,
+    startLine+(*currentLine),
+    virtualWidth
+  );
+
+  retval = getLine2(
+      input,
+      virtualWidth
+    );
+
+  /* if the first line starts with a very long word print it anyway */
+  if(doTparm && lineLength == 0 && lastWordLength > width) {
+    retval = getLine2(
+      input,
+      virtualWidth
+    );
+
+    *tempLineOffset = (*tempLineOffset)->next;
+
+    if(lastWordLength) {
+      *currentLine = *currentLine - 1;
+    }
+    else {
+      *tempLineOffset = (*tempLineOffset)->previous;
+    }
+  }
+
+  return retval;
+}
+
 int drawScreen(
     FILE* input,
     int startLine,
@@ -978,8 +1057,10 @@ int drawScreen(
   int currentLine = 0;
   int notLastLine = TRUE;
   int leftMargin = 0;
-  int i;
+  int i, j;
   int doTparm = FALSE;
+  unsigned char gotch;
+  struct offsets * tempLineOffset;
 
   if(startLine == previousLine + 1) {
     putchar('\r');
@@ -1040,6 +1121,8 @@ int drawScreen(
     }
   }
 
+  tempLineOffset = topLineOffset;
+
   for( ; currentLine < height - 1; currentLine++) {
     if(!notLastLine && startLine == 0) {
       /* the file has fewer lines than the screen does.
@@ -1048,50 +1131,55 @@ int drawScreen(
         fputc(' ', stdout);
       }
     }
-    else {
-      maintainLineOffsets(
-          input,
-          startLine+currentLine,
-          virtualWidth
-        );
-
+    else if(!doTparm || currentLine == 0) {
       notLastLine = getLine(
           input,
-          virtualWidth
+          virtualWidth,
+          doTparm,
+          startLine,
+          &currentLine,
+          &tempLineOffset
         );
 
-      if(!doTparm || currentLine == 0) {
-        /*if the first line starts with a very long word print it anyway */
-        if(doTparm && lineLength == 0 && lastWordLength > width) {
-          getLine(
-            input,
-            virtualWidth
-          );
-
-          if(lastWordLength) {
-            currentLine--;
+      for(i = 0, j = 0; i < width + leftOffset - leftMargin; i++) {
+        if(i == 0 && leftMargin) {
+          for(; i < leftMargin; i++) {
+            fputc(' ', stdout);
           }
+
+          i = 0;
         }
 
-        for(i = 0; i < width + leftOffset - leftMargin; i++) {
-          if(i == 0 && leftMargin) {
-            for(; i < leftMargin; i++) {
-              fputc(' ', stdout);
-            }
+        if(i >= leftOffset) {
+          if(i < lineLength) {
+            gotch = ((unsigned char)line[j]);
 
-            i = 0;
-          }
-
-          if(i >= leftOffset) {
-            if(i < lineLength) {
-              fputc(line[i], stdout);
+            if(gotch < 0x80) {
+              fputc(gotch < 0x20 ? '?' : gotch, stdout);
+              j++;
             }
             else {
-              fputc(' ', stdout);
+              /* display '?' for utf-8 characters */
+              fputc('?', stdout);
+              j++;
+
+              while((gotch = ((unsigned char)line[j])) > 126 && gotch < 192) {
+                j++;
+              }
             }
+          }
+          else {
+            fputc(' ', stdout);
           }
         }
       }
+
+      if(doTparm && tempLineOffset->next) {
+        tempLineOffset = tempLineOffset->next;
+      }
+    }
+    else if(doTparm && tempLineOffset->next) {
+      tempLineOffset = tempLineOffset->next;
     }
   }
 
@@ -1107,7 +1195,11 @@ int drawScreen(
   /* Did we just only repaint the top line(s) of the screen?
   If so, just skip back to the bottom line */
   if(doTparm) {
-    moveCursor(0, height-1);
+    freeAndZero(lastWord);
+    lastWordLength = 0;
+
+    myfseek(input, tempLineOffset->value, SEEK_SET);
+    moveCursor(0, height - 1);
   }
 
   /* redisplay the navigation message (in bold) */
@@ -1158,7 +1250,7 @@ int main(int argc, char * argv[]) {
     printf("Press 'q' to quit or SPACE to continue\n");
 
     do {
-      notLastLine = getLine(
+      notLastLine = getLine2(
           input,
           width
         );
